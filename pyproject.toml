@@ -55,13 +55,12 @@ ignore = [
 case-sensitive = true
 lines-between-types = 0  # like isort default.
 relative-imports-order = "furthest-to-closest"  # like isort default.
-known-first-party = ["sbi", "tests", "tutorials"]
+known-first-party = ["monoculture", "tests"]
 
 [tool.ruff.format]
 exclude = ["*.ipynb"]
 preview = true
 quote-style = "preserve"
-
 
 # Pytest configuration
 [tool.pytest.ini_options]
@@ -69,10 +68,10 @@ minversion = "8.0"
 testpaths = ["tests"]
 
 # isort
-[tool.isort]
-profile = "hug"
-force_single_line = false
-src_paths = ["monoculture", "tests"]
+# [tool.isort]
+# profile = "hug"
+# force_single_line = false
+# src_paths = ["monoculture", "tests"]
 
 # Coverage
 [tool.coverage.run]

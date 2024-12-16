@@ -9,3 +9,4 @@ torch
 matplotlib
 seaborn
 ruff>=0.3.3
+more-itertools
