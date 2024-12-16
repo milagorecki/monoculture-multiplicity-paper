@@ -1,0 +1,125 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "monoculture"
+description = "Analyzing model prediction for algorithmic monoculture"
+readme="README.md"
+authors = [
+    { name = "Mila Gorecki" },
+]
+dynamic = ["version", "dependencies", "optional-dependencies",]
+requires-python = ">=3.8"
+keywords = ["language-model", "monoculture", "multiplicity",  "machine-learning"]
+
+
+[tool.setuptools.packages.find]
+where = ["."]  # list of folders that contain the packages (["."] by default)
+include = ["monoculture"]
+exclude = ["tests*", "docs*"]
+
+[tool.setuptools.dynamic]
+version = {attr = "monoculture.__version__"}
+
+dependencies = {file = "requirements/main.txt"}
+
+# Optional dependencies
+optional-dependencies.tests = {file = "requirements/tests.txt"}
+optional-dependencies.docs = {file = "requirements/docs.txt"}
+optional-dependencies.cluster = {file = "requirements/cluster.txt"}
+
+[project.urls]
+homepage =  "https://github.com/milagorecki/monoculture"
+source = "https://github.com/milagorecki/monoculture/monoculture"
+tracker = "https://github.com/milagorecki/monoculture/issues"
+
+# ruff configs
+[tool.ruff]
+extend-include = ["*.ipynb"]
+line-length = 88
+
+[tool.ruff.lint]
+# pycodestyle, Pyflakes, pyupgrade, flake8-bugbear, flake8-simplify, isort
+select = ["E", "F", "W", "B", "SIM", "I"]
+ignore = [
+    "E731",  # allow naming lambda functions.
+    "B008",  # allow function calls in default args.
+]
+
+[tool.ruff.lint.extend-per-file-ignores]
+"__init__.py" = ["E402", "F401", "F403"]  # allow unused imports and undefined names
+"test_*.py" = ["F403", "F405"]
+
+[tool.ruff.lint.isort]
+case-sensitive = true
+lines-between-types = 0  # like isort default.
+relative-imports-order = "furthest-to-closest"  # like isort default.
+known-first-party = ["sbi", "tests", "tutorials"]
+
+[tool.ruff.format]
+exclude = ["*.ipynb"]
+preview = true
+quote-style = "preserve"
+
+
+# Pytest configuration
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+
+# isort
+[tool.isort]
+profile = "hug"
+force_single_line = false
+src_paths = ["monoculture", "tests"]
+
+# Coverage
+[tool.coverage.run]
+branch = true
+source = ["monoculture"]
+omit = ["tests"]
+
+[tool.coverage.report]
+show_missing = true
+
+# MyPy
+[tool.mypy]
+ignore_missing_imports = true
+no_implicit_optional = false
+exclude = ["build", "doc"]
+
+# Tox
+[tool.tox]
+legacy_tox_ini = """
+[tox]
+env_list =
+    py38
+    py39
+    py310
+    py311
+    py312
+    lint
+    type
+
+[testenv]
+description = run unit tests
+deps =
+    pytest>=8
+commands = python -m pytest {posargs:tests}
+
+[testenv:lint]
+description = run linters
+skip_install = true
+deps =
+    flake8>=7.0
+    flake8-pyproject
+commands = flake8 {posargs:monoculture tests}
+
+[testenv:type]
+description = run type checks
+deps =
+    mypy>=1.9
+commands =
+    mypy {posargs:monoculture tests}
+"""
