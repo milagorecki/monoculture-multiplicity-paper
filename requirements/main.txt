@@ -1,4 +1,5 @@
 folktables~=0.0.12
+folktexts
 scikit-learn>=1.3
 numpy
 pandas
@@ -10,3 +11,4 @@ matplotlib
 seaborn
 ruff>=0.3.3
 more-itertools
+xgboost
