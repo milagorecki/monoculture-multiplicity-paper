@@ -1,0 +1,346 @@
+import os
+import re
+from .setup import ACS_TASKS, LLM_MODELS, BASELINE_RESULTS_PATH
+from folktexts._io import load_json, save_json
+import pandas as pd
+from pathlib import Path
+import json
+
+## Utils
+
+model_to_key = lambda m: m.replace("/", "--")
+key_to_model = lambda m: m.replace("--", "/")
+
+
+def prettify_model_name(name: str) -> str:
+    """Get prettified version of the given model name."""
+    dct = {
+        # Google Gemma models
+        "google/gemma-1.1-2b-it": "Gemma 2B (it)",
+        "google/gemma-1.1-7b-it": "Gemma 7B (it)",
+        "google/gemma-2b": "Gemma 2B",
+        "google/gemma-7b": "Gemma 7B",
+        "google/gemma-2-9b": "Gemma 2 9B",
+        "google/gemma-2-9b-it": "Gemma 2 9B (it)",
+        "google/gemma-2-27b": "Gemma 2 27B",
+        "google/gemma-2-27b-it": "Gemma 2 27B (it)",
+        # Meta Llama models
+        "meta-llama/Meta-Llama-3-70B": "Llama 3 70B",
+        "meta-llama/Meta-Llama-3-70B-Instruct": "Llama 3 70B (it)",
+        "meta-llama/Meta-Llama-3-8B": "Llama 3 8B",
+        "meta-llama/Meta-Llama-3-8B-Instruct": "Llama 3 8B (it)",
+        "meta-llama/Meta-Llama-3.1-8B": "Llama 3.1 8B",
+        "meta-llama/Meta-Llama-3.1-8B-Instruct": "Llama 3.1 8B (it)",
+        "meta-llama/Meta-Llama-3.1-70B": "Meta Llama 3.1 70B",
+        "meta-llama/Meta-Llama-3.1-70B-Instruct": "Meta Llama 3.1 70B (it)",
+        "meta-llama/Meta-Llama-3.2-1B": "Meta Llama 3.2 1B",
+        "meta-llama/Meta-Llama-3.2-1B-Instruct": "Meta Llama 3.2 1B (it)",
+        "meta-llama/Meta-Llama-3.2-3B": "Meta Llama 3.2 3B",
+        "meta-llama/Meta-Llama-3.2-3B-Instruct": "Meta Llama 3.2 3B (it)",
+        # Mistral AI models
+        "mistralai/Mistral-7B-Instruct-v0.2": "Mistral 7B (it)",
+        "mistralai/Mistral-7B-v0.1": "Mistral 7B",
+        "mistralai/Mixtral-8x22B-Instruct-v0.1": "Mixtral 8x22B (it)",
+        "mistralai/Mixtral-8x22B-v0.1": "Mixtral 8x22B",
+        "mistralai/Mixtral-8x7B-Instruct-v0.1": "Mixtral 8x7B (it)",
+        "mistralai/Mixtral-8x7B-v0.1": "Mixtral 8x7B",
+        # Yi models
+        "01-ai/Yi-34B": "Yi 34B",
+        "01-ai/Yi-34B-Chat": "Yi 34B (chat)",
+        "01-ai/Yi-6B-Chat": "Yi 6B (chat)",
+        # Qwen2 models
+        "Qwen/Qwen2-1.5B": "Qwen 2 1.5B",
+        "Qwen/Qwen2-1.5B-Instruct": "Qwen 2 1.5B (it)",
+        "Qwen/Qwen2-7B": "Qwen 2 7B",
+        "Qwen/Qwen2-7B-Instruct": "Qwen 2 7B (it)",
+        "Qwen/Qwen2-72B": "Qwen 2 72B",
+        "Qwen/Qwen2-72B-Instruct": "Qwen 2 72B (it)",
+        # Tabula
+        "mlfoundations/tabula-8b": "Tabula 8B",
+        # Olmo
+        "allenai/OLMo-1B-0724-hf": "OLMo 1B 0724",
+        "allenai/OLMo-1B-hf": "OLMo 1B",
+        "allenai/OLMo-7B-0724-hf": "OLMo 7B 0724",
+        "allenai/OLMo-7B-hf": "OLMo 7B",
+        "allenai/OLMo-7B-Instruct-hf": "OLMo 7B (it)",
+        "allenai/OLMo-2-1124-7B": "OLMo 2 7B",
+        "allenai/OLMo-2-1124-7B-Instruct": "OLMo 2 7B (it)",
+    }
+
+    if name in dct:
+        return dct[name]
+    else:
+        print(f"Couldn't find prettified name for {name}.")
+        return name
+
+
+def is_instruction_tuned(model_name: str) -> bool:
+    """Indicator if a model is instruction tuned (solely inferred from the model name).
+
+    Args:
+        model_name (str): name of the model
+
+    Returns:
+        bool: model is instruction-finetuned
+    """
+    indicators = ["Instruct", "it", "Chat"]
+    return any(ind in model_name for ind in indicators)
+
+
+def create_result_df(
+    root_dir: str | Path,
+    subfolders: list,
+    tasks: list = ACS_TASKS,
+    save_path: str | Path = None,
+    # add_baselines: list = [],
+) -> pd.DataFrame:
+    """
+    Creates a pandas DataFrame with relevant metadata and paths from result files.
+
+    Parameters
+    ----------
+    root_dir : str or Path
+        Root directory where results are gathered from.
+    tasks : list, optional
+        List of tasks to include in the DataFrame (default is ACS_TASKS).
+    save_path : str or Path, optional
+        If provided, the DataFrame will be saved to this path.
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with the following columns:
+            - task: str, task name
+            - model: str, model name
+            - is_inst: int, whether the model is instruction-finetuned
+            - bench_hash: str, hash of the benchmarking result
+            - num_shots: int, number of shots used for few-shot prompting
+            - prompt_style: str, style of the prompt used
+            - prompt_connector: str, connector used for the prompt
+            - eval_results_path: str, path to the evaluation results file
+            - predictions_path: str, path to the predictions file
+    """
+    results_all_tasks = []
+    for task in tasks:
+        for folder in subfolders:
+            # file name pattern
+            pattern_json = r"^results.bench-(?P<hash>\d+)[.]json$"
+            # find results files
+            bench_results_files = find_files(
+                (Path(root_dir) / folder), pattern_json, dir_pattern=task
+            )
+            for file_path in bench_results_files:
+                model_name = (
+                    Path(file_path)
+                    .parent.parent.name.replace("model-", "")
+                    .replace(f"_task-{task}", "")
+                )  # extract model_name from model folder
+                bench_hash = Path(file_path).parent.name.split("_bench-")[1]
+                parsed_results = parse_results_dict(load_json(file_path))
+
+                # save relevant metadata and path in df
+                res = [
+                    task,
+                    model_name,
+                    int(is_instruction_tuned(model_name)),
+                    bench_hash,
+                    (
+                        parsed_results["config_few_shot"]
+                        if parsed_results.get("config_few_shot")
+                        else 0
+                    ),
+                    parsed_results.get("config_prompt_style"),
+                    parsed_results.get("config_prompt_connector"),
+                    file_path,
+                    parsed_results["predictions_path"][
+                        parsed_results["predictions_path"].find("results/") :
+                    ],
+                ]
+                results_all_tasks.append(res)
+    df = pd.DataFrame(
+        results_all_tasks,
+        columns=[
+            "task",
+            "model",
+            "is_inst",
+            "bench_hash",
+            "num_shots",
+            "prompt_style",
+            "prompt_connector",
+            "eval_results_path",
+            "predictions_path",
+        ],
+    )
+    print(df.shape)
+    if save_path:
+        df.to_csv(save_path, index=False)
+    return df
+
+
+def find_files(root_folder, pattern, dir_pattern=""):
+    # Compile the regular expression pattern
+    regex = re.compile(pattern)
+
+    # Walk through the directory tree
+    for dirpath, dirnames, filenames in os.walk(root_folder):
+        if dir_pattern in dirpath:
+            for filename in filenames:
+                if regex.match(filename):
+                    # If the filename matches the pattern, add it to the list
+                    yield os.path.join(dirpath, filename)
+
+
+def parse_model_name(name: str) -> str:
+    name = name[name.find("--") + 2 :]
+    return name
+
+
+def get_base_name(name):
+    name = re.sub(r"-(Instruct|Chat|it|1\.1)$", "", name, count=1)
+    name = re.sub(r"-v0\.2$", "-v0.1", name, count=1)
+    return name
+
+
+model_col = "config_model_name"
+# model_col = "model_name"
+feature_subset_col = "config_feature_subset"
+population_subset_col = "config_population_filter"
+predictions_path_col = "predictions_path"
+
+uses_all_features_col = "uses_all_features"
+uses_all_samples_col = "uses_all_samples"
+
+
+def parse_results_dict(dct) -> dict:
+    """Parses results dict; brings all information to the top-level."""
+    dct = dct.copy()
+    dct.pop("plots", None)
+    config = dct.pop("config", {})
+    for key, val in config.items():
+        dct[f"config_{key}"] = val
+
+    # Parse model name
+    dct[model_col] = parse_model_name(dct[model_col])
+    dct[uses_all_features_col] = dct[feature_subset_col] is None
+    if dct[feature_subset_col] is None:
+        dct[feature_subset_col] = "full"
+
+    dct[uses_all_samples_col] = dct[population_subset_col] is None
+
+    dct["base_name"] = get_base_name(dct[model_col])
+    dct["is_inst"] = dct["base_name"] != dct[model_col]
+
+    assert not any(isinstance(val, dict) for val in dct.values()), dct
+    return dct
+
+
+def load_risk_scores(csv_path: str | Path) -> pd.DataFrame:
+    """
+    Loads risk scores from a csv file, removes the 'label' column, and renames
+    the 'risk_score' column to the model name.
+
+    Args:
+        csv_path (str | Path): The file path to the csv containing model predictions.
+
+    Returns:
+        pd.DataFrame: A DataFrame with risk scores, where the 'risk_score' column
+                      is renamed to the model name.
+    """
+    # load risk scores, change column to <model_name>
+    risk_score = (
+        pd.read_csv(csv_path, index_col=0)
+        .drop("label", axis=1)
+        .rename(
+            columns={
+                "risk_score": re.search(r"model-(.+?)_task-", csv_path)
+                .group(1)
+                .split("/")[1]
+            }
+        )
+    )
+    return risk_score
+
+
+def get_predictions(csv_path: str | Path) -> pd.DataFrame:
+    """
+    Loads risk scores and binarize usiing binarization threshold from
+    evaluation results. Returns a DataFrame.
+
+    Args:
+        csv_path (str | Path): The file path to the CSV containing risk scores.
+
+    Returns:
+        pd.DataFrame: A DataFrame with binarized predictions.
+    """
+    risk_scores = load_risk_scores(csv_path)
+    # binarize using threshold from respective eval results
+    bench_hash = Path(csv_path).parent.as_posix().split("bench-")[1]
+    threshold = load_json(
+        Path(csv_path).parent / f"results.bench-{bench_hash}.json"
+    ).get("threshold")
+    if threshold is None:
+        print(f"Threshold not found for {csv_path}, defaulting to 0.5")
+        threshold = 0.5
+    return risk_scores.map(lambda x: int(x >= threshold))
+
+
+def get_metric(json_path: str | Path, metric: str = "accuracy"):
+    """
+    Retrieves the specified metric from a benchmark results file.
+
+    Args:
+        json_path (str | Path): Path to the JSON file containing evaluation results.
+        metric (str, optional): The name of the metric to retrieve. Defaults to "accuracy".
+
+    Returns:
+        The value of the specified metric from the evaluation results.
+    """
+    evals = load_json(json_path)
+    return evals[metric]
+
+
+def get_metrics(json_path: str | Path, metrics: list[str]):
+    """
+    Retrieves multiple metrics from a benchmark results file.
+
+    Args:
+        json_path (str | Path): Path to the JSON file containing evaluation results.
+        metrics (list[str]): A list of metric names to retrieve.
+
+    Returns:
+        A dictionary with the metric names as keys and their respective values as values.
+    """
+    evals = load_json(json_path)
+    return {metric: evals[metric] for metric in metrics}
+
+
+def load_baselines(baselines: dict, tasks: list, rerun: bool = False) -> tuple:
+    baseline_results_all_tasks = {}
+    baseline_risk_scores_all_tasks = {}
+    for task_name in tasks:
+        print(f"Loading baselines for {task_name}.")
+        results = {}
+        risk_scores = []
+        for clf_name, clf in baselines.items():
+            clf_path = BASELINE_RESULTS_PATH / f"{clf_name}_task-{task_name}"
+            if (clf_path).exists() and not rerun:
+                print(f"- {clf_name}: Load predictions from '{clf_path}'.")
+                scores = pd.read_csv(
+                    clf_path / f"{task_name}.test_predictions.csv", index_col=0
+                )
+                prediction_eval = load_json(
+                    path=clf_path / f"{task_name}-results.bench.json"
+                )
+            else:
+                print(f"Skipping {clf_name}")
+            results[clf_name] = prediction_eval
+            risk_scores.append(scores)
+
+        baseline_results_all_tasks[task_name] = results
+        baseline_risk_scores_all_tasks[task_name] = pd.concat(risk_scores, axis=1)
+
+    return baseline_risk_scores_all_tasks, baseline_results_all_tasks
+
+
+def truncate(num: float, digits: int = 6) -> float:
+    return round(num - 10**-digits / 2, digits)
