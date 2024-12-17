@@ -10,7 +10,7 @@ from folktexts._io import load_json, save_json
 from folktexts.llm_utils import get_model_folder_path, get_model_size_B
 from folktexts.cli._utils import get_or_create_results_dir
 
-from .experiments import Experiment, launch_experiment_job
+from folktexts.cli.experiments import Experiment, launch_experiment_job
 import logging
 
 
@@ -24,7 +24,7 @@ ACS_TASKS = (
 )
 
 # Baselines to evaluate
-from folktexts.baseline import BASELINES
+from monoculture.baseline import BASELINES
 
 ################
 # Useful paths #
@@ -172,7 +172,7 @@ def main():
     args, extra_kwargs = parser.parse_known_args()
 
     # Parse extra kwargs
-    from ._utils import cmd_line_args_to_kwargs
+    from folktexts.cli._utils import cmd_line_args_to_kwargs
 
     extra_kwargs = cmd_line_args_to_kwargs(extra_kwargs)
 

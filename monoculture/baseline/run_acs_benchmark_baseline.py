@@ -12,6 +12,7 @@ import sys
 from argparse import ArgumentParser, Action
 from pathlib import Path
 from monoculture.baseline import BASELINES
+from folktexts._utils import ParseDict
 
 DEFAULT_ACS_TASK = "ACSIncome"
 
