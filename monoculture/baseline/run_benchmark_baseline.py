@@ -11,10 +11,12 @@ import logging
 import sys
 from argparse import ArgumentParser, Action
 from pathlib import Path
-from monoculture.baseline import BASELINES
+
 from folktexts._utils import ParseDict
 
-DEFAULT_ACS_TASK = "ACSIncome"
+from . import BASELINES
+from ..analysis.setup import ACS_TASKS, TABLESHIFT_TASKS
+TASKS = ACS_TASKS + TABLESHIFT_TASKS
 
 DEFAULT_SEED = 42
 
@@ -66,7 +68,7 @@ def setup_arg_parser() -> ArgumentParser:
 
     # List of command-line arguments, with type and helper string
     cli_args = [
-        ("--model", str, "[str] Model name or path to model saved on disk"),
+        ("--model", str, f"[str] Baseline model name, one of {BASELINES}", True,),
         (
             "--results-dir",
             str,
@@ -76,9 +78,8 @@ def setup_arg_parser() -> ArgumentParser:
         (
             "--task",
             str,
-            "[str] Name of the ACS task to run the experiment on",
-            False,
-            DEFAULT_ACS_TASK,
+            f"[str] Name of the task to run the experiment on, one of {TASKS}",
+            True,
         ),
         (
             "--subsampling",
@@ -157,6 +158,11 @@ def main():
     logging.info(f"Current python executable: '{sys.executable}'")
     logging.info(f"Received the following cmd-line args: {pretty_args_str}")
 
+    task = args.task
+    model = args.model
+    assert task in TASKS, f"Unknown task name: {task}, must be one of {TASKS}"
+    assert model in BASELINES, f"Unknown model name: {model}, must be one of {BASELINES}"
+
     # Parse population filter if provided
     population_filter_dict = None
     if args.use_population_filter:
@@ -179,16 +185,29 @@ def main():
 
     # Create ACS Benchmark object
     from monoculture.baseline.benchmark import BenchmarkBaseline
-
-    bench = BenchmarkBaseline.make_acs_benchmark(
-        task_name=args.task,
-        model=args.model,
+    
+    if task in ACS_TASKS:
+        bench = BenchmarkBaseline.make_acs_benchmark(
+        task_name=task,
+        model=model,
         clf_params=args.clf_params,
         # using auto-tokenizer, TODO: check if baseline
         data_dir=args.data_dir,
         config=config,
         subsampling=args.subsampling,
     )
+    elif task in TABLESHIFT_TASKS:
+        bench = BenchmarkBaseline.make_tableshift_benchmark(
+        task_name=task,
+        model=model,
+        clf_params=args.clf_params,
+        # using auto-tokenizer, TODO: check if baseline
+        data_dir=args.data_dir,
+        config=config,
+        subsampling=args.subsampling,
+    )
+    else:
+        raise ValueError(f"Task {task} not implemented.")
 
     # Set-up results directory
     from folktexts.cli._utils import get_or_create_results_dir

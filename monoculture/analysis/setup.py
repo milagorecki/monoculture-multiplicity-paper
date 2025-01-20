@@ -13,6 +13,11 @@ ACS_TASKS = (  # all ACS prediction tasks
     "ACSPublicCoverage",
 )
 
+TABLESHIFT_TASKS = (  # all table shift tasks
+    "BRFSS_Diabetes",
+    #"BRFSS_Blood_Pressure"
+)
+
 LLM_MODELS = [  # LLMs to evaluate
     # Google Gemma2 models
     "google/gemma-2b",

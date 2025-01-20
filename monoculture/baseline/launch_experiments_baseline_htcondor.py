@@ -7,21 +7,13 @@ from pathlib import Path
 from pprint import pprint
 
 from folktexts._io import load_json, save_json
-from folktexts.llm_utils import get_model_folder_path, get_model_size_B
 from folktexts.cli._utils import get_or_create_results_dir
 
 from folktexts.cli.experiments import Experiment, launch_experiment_job
 import logging
 
-
-# All ACS prediction tasks
-ACS_TASKS = (
-    "ACSIncome",
-    "ACSEmployment",
-    "ACSMobility",
-    "ACSTravelTime",
-    "ACSPublicCoverage",
-)
+from ..analysis.setup import ACS_TASKS, TABLESHIFT_TASKS
+TASKS = ACS_TASKS + TABLESHIFT_TASKS
 
 # Baselines to evaluate
 from monoculture.baseline import BASELINES
@@ -178,7 +170,7 @@ def main():
 
     # Prepare command-line arguments
     models = args.model or BASELINES
-    tasks = args.task or ACS_TASKS
+    tasks = args.task or TASKS
     executable_path = Path(args.executable_path).resolve()
     if not executable_path.exists() or not executable_path.is_file():
         raise FileNotFoundError(f"Executable script not found at '{executable_path}'.")

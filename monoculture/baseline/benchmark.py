@@ -16,8 +16,8 @@ from folktexts.benchmark import (
 from folktexts._io import load_json, save_json
 from folktexts._utils import hash_dict, is_valid_number, get_current_timestamp
 from folktexts.dataset import Dataset
-from folktexts.acs.acs_dataset import ACSDataset
-from folktexts.acs.acs_tasks import ACSTaskMetadata
+from folktexts.acs import ACSDataset, ACSTaskMetadata
+from folktexts.ts import TableshiftBRFSSDataset, TableshiftBRFSSTaskMetadata
 from folktexts.task import TaskMetadata
 from folktexts.evaluation import evaluate_predictions
 from folktexts.plotting import render_evaluation_plots, render_fairness_plots
@@ -108,6 +108,18 @@ class BenchmarkBaseline:
         "test_size": 0.1,
         "val_size": 0.1,
         "subsampling": None,
+        # Fixed random seed
+        "seed": 42,
+    }
+
+    TABLESHIFT_DATASET_CONFIGS = {
+        # survey configs should be defined in task
+
+        # Data split configs
+        "test_size": 0.1,
+        "val_size": 0.1,
+        "subsampling": None,
+
         # Fixed random seed
         "seed": 42,
     }
@@ -446,6 +458,78 @@ class BenchmarkBaseline:
         return cls.make_benchmark(
             task=acs_task,
             dataset=acs_dataset,
+            model=model,
+            clf_params=clf_params,
+            config=config,
+            **kwargs,
+        )
+
+
+
+    @classmethod
+    def make_tableshift_benchmark(
+        cls,
+        task_name: str,
+        *,
+        model: BaseEstimator | str,
+        clf_params=dict,
+        data_dir: str | Path = None,
+        config: BenchmarkConfig = BenchmarkConfig.default_config(),
+        **kwargs,
+    ) -> Benchmark:
+        """Create a standardized calibration benchmark on ACS data.
+
+        Parameters
+        ----------
+        task_name : str
+            The name of the ACS task to use.
+        model : AutoModelForCausalLM | str
+            The transformers language model to use, or the model ID for a webAPI
+            hosted model (e.g., "openai/gpt-4o-mini").
+        tokenizer : AutoTokenizer, optional
+            The tokenizer used to train the model (if using a transformers
+            model). Not required for webAPI models.
+        data_dir : str | Path, optional
+            Path to the directory to load data from and save data in.
+        max_api_rpm : int, optional
+            The maximum number of API requests per minute for webAPI models.
+        config : BenchmarkConfig, optional
+            Extra benchmark configurations, by default will use
+            `BenchmarkConfig.default_config()`.
+        **kwargs
+            Additional arguments passed to `ACSDataset` and `BenchmarkConfig`.
+            By default will use a set of standardized configurations for
+            reproducibility.
+
+        Returns
+        -------
+        bench : Benchmark
+            The ACS calibration benchmark object.
+        """
+        # Handle non-standard ACS arguments
+        tableshift_dataset_configs = cls.TABLESHIFT_DATASET_CONFIGS.copy()
+        for arg in tableshift_dataset_configs:
+            if arg in kwargs and kwargs[arg] != cls.TABLESHIFT_DATASET_CONFIGS[arg]:
+                logging.warning(
+                    f"Received non-standard Tableshiftargument '{arg}' (using "
+                    f"{arg}={kwargs[arg]} instead of default {arg}={cls.TABLESHIFT_DATASET_CONFIGS[arg]}). "
+                    f"This may affect reproducibility."
+                )
+                tableshift_dataset_configs[arg] = kwargs.pop(arg)
+
+        # Update config with any additional kwargs
+        config = config.update(**kwargs)
+
+        # Fetch ACS task and dataset
+        tableshift_task = TableshiftBRFSSTaskMetadata.get_task(name=task_name)
+
+        tablshift_dataset = TableshiftBRFSSDataset.make_from_task(
+            task=tableshift_task, cache_dir=data_dir, **tableshift_dataset_configs
+        )
+
+        return cls.make_benchmark(
+            task=tableshift_task,
+            dataset=tablshift_dataset,
             model=model,
             clf_params=clf_params,
             config=config,
