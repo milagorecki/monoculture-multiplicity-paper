@@ -13,10 +13,10 @@ ACS_TASKS = (  # all ACS prediction tasks
     "ACSPublicCoverage",
 )
 
-TABLESHIFT_TASKS = (  # all table shift tasks
+TABLESHIFT_TASKS = (
     "BRFSS_Diabetes",
-    #"BRFSS_Blood_Pressure"
-)
+    "BRFSS_Blood_Pressure",
+)  # all tableshift tasks
 
 LLM_MODELS = [  # LLMs to evaluate
     # Google Gemma2 models
@@ -49,9 +49,11 @@ LLM_MODELS = [  # LLMs to evaluate
     "mistralai/Mixtral-8x22B-v0.1",
     "mistralai/Mixtral-8x22B-Instruct-v0.1",
     # Yi models
+    "01-ai/Yi-1.5-6B",
+    "01-ai/Yi-6B",
+    "01-ai/Yi-6B-Chat",
     "01-ai/Yi-34B",
     "01-ai/Yi-34B-Chat",
-    "01-ai/Yi-6B-Chat",
     # Qwen2 models
     "Qwen/Qwen2-1.5B",
     "Qwen/Qwen2-1.5B-Instruct",
