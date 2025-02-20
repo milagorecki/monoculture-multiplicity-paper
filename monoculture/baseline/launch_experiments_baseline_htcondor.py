@@ -12,7 +12,7 @@ from folktexts.cli._utils import get_or_create_results_dir
 from folktexts.cli.experiments import Experiment, launch_experiment_job
 import logging
 
-from ..analysis.setup import ACS_TASKS, TABLESHIFT_TASKS
+from monoculture.analysis.setup import ACS_TASKS, TABLESHIFT_TASKS
 
 TASKS = ACS_TASKS + TABLESHIFT_TASKS
 

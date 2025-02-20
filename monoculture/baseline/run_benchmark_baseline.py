@@ -14,8 +14,8 @@ from pathlib import Path
 
 from folktexts._utils import ParseDict
 
-from . import BASELINES
-from ..analysis.setup import ACS_TASKS, TABLESHIFT_TASKS
+from monoculture.baseline import BASELINES
+from monoculture.analysis.setup import ACS_TASKS, TABLESHIFT_TASKS
 
 TASKS = ACS_TASKS + TABLESHIFT_TASKS
 
