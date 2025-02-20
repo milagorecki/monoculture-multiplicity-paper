@@ -13,6 +13,7 @@ from folktexts.cli.experiments import Experiment, launch_experiment_job
 import logging
 
 from ..analysis.setup import ACS_TASKS, TABLESHIFT_TASKS
+
 TASKS = ACS_TASKS + TABLESHIFT_TASKS
 
 # Baselines to evaluate
@@ -98,7 +99,7 @@ def make_base_clf_experiment(
 def setup_arg_parser() -> argparse.ArgumentParser:
     # Init parser
     parser = argparse.ArgumentParser(
-        description="Launch experiments to evaluate LLMs as classifiers."
+        description="Launch experiments to evaluate baseline classifiers."
     )
 
     parser.add_argument(

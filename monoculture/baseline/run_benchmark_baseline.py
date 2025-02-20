@@ -16,6 +16,7 @@ from folktexts._utils import ParseDict
 
 from . import BASELINES
 from ..analysis.setup import ACS_TASKS, TABLESHIFT_TASKS
+
 TASKS = ACS_TASKS + TABLESHIFT_TASKS
 
 DEFAULT_SEED = 42
@@ -68,7 +69,12 @@ def setup_arg_parser() -> ArgumentParser:
 
     # List of command-line arguments, with type and helper string
     cli_args = [
-        ("--model", str, f"[str] Baseline model name, one of {BASELINES}", True,),
+        (
+            "--model",
+            str,
+            f"[str] Baseline model name, one of {BASELINES}",
+            True,
+        ),
         (
             "--results-dir",
             str,
@@ -161,7 +167,9 @@ def main():
     task = args.task
     model = args.model
     assert task in TASKS, f"Unknown task name: {task}, must be one of {TASKS}"
-    assert model in BASELINES, f"Unknown model name: {model}, must be one of {BASELINES}"
+    assert (
+        model in BASELINES
+    ), f"Unknown model name: {model}, must be one of {BASELINES}"
 
     # Parse population filter if provided
     population_filter_dict = None
@@ -185,27 +193,27 @@ def main():
 
     # Create ACS Benchmark object
     from monoculture.baseline.benchmark import BenchmarkBaseline
-    
+
     if task in ACS_TASKS:
         bench = BenchmarkBaseline.make_acs_benchmark(
-        task_name=task,
-        model=model,
-        clf_params=args.clf_params,
-        # using auto-tokenizer, TODO: check if baseline
-        data_dir=args.data_dir,
-        config=config,
-        subsampling=args.subsampling,
-    )
+            task_name=task,
+            model=model,
+            clf_params=args.clf_params,
+            # using auto-tokenizer, TODO: check if baseline
+            data_dir=args.data_dir,
+            config=config,
+            subsampling=args.subsampling,
+        )
     elif task in TABLESHIFT_TASKS:
         bench = BenchmarkBaseline.make_tableshift_benchmark(
-        task_name=task,
-        model=model,
-        clf_params=args.clf_params,
-        # using auto-tokenizer, TODO: check if baseline
-        data_dir=args.data_dir,
-        config=config,
-        subsampling=args.subsampling,
-    )
+            task_name=task,
+            model=model,
+            clf_params=args.clf_params,
+            # using auto-tokenizer, TODO: check if baseline
+            data_dir=args.data_dir,
+            config=config,
+            subsampling=args.subsampling,
+        )
     else:
         raise ValueError(f"Task {task} not implemented.")
 
