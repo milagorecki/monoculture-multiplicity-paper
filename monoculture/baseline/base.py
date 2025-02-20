@@ -14,7 +14,7 @@ from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.neural_network import MLPClassifier
-from xgboost import XGBClassifier
+from xgboost import XGBClassifier, XGBModel
 from sklearn.dummy import DummyClassifier
 
 from folktexts.task import TaskMetadata
@@ -56,16 +56,37 @@ class BaselineClassifier(ClassifierMixin, BaseEstimator, ABC):
         filtered_params = {
             k: v
             for k, v in clf_params.items()
-            if k in BASELINES[model_name]._get_param_names()
+            if k
+            in (
+                BASELINES[model_name]._get_param_names()
+                if model_name != "XGBoost"
+                else XGBModel._get_param_names()
+            )
         }
-        if len(filtered_params) > 0:
-            logging.warning(f"Using only recognized hyperparameters: {filtered_params}")
+        if len(filtered_params) < len(clf_params):
+            logging.warning(
+                f"Did not recognize: {[k for k in clf_params.keys() if k not in filtered_params.keys()]}"
+            )
+            if len(filtered_params) > 0:
+                logging.warning(
+                    f"Using only recognized hyperparameters: {filtered_params}"
+                )
+
         self.clf_params = filtered_params
+
+        # set seed
+        if filtered_params.get("random_state"):
+            logging.warning("seed overwritten by 'random_state'")
+            self._seed = filtered_params.get("random_state")
+        else:
+            self.clf_params["random_state"] = seed
+            self._seed = seed
+
+        # initialize baseline model
         self._clf = BASELINES[model_name](**filtered_params)
 
         self._task = TaskMetadata.get_task(task) if isinstance(task, str) else task
         self._threshold = threshold
-        self._seed = seed
 
         # Default inference kwargs
         self._inference_kwargs = inference_kwargs
