@@ -48,6 +48,8 @@ def prettify_model_name(name: str) -> str:
         "01-ai/Yi-34B": "Yi 34B",
         "01-ai/Yi-34B-Chat": "Yi 34B (chat)",
         "01-ai/Yi-6B-Chat": "Yi 6B (chat)",
+        "01-ai/Yi-6B": "Yi 6B",
+        "01-ai/Yi-1.5-6B": "Yi 1.5 6B",
         # Qwen2 models
         "Qwen/Qwen2-1.5B": "Qwen 2 1.5B",
         "Qwen/Qwen2-1.5B-Instruct": "Qwen 2 1.5B (it)",
@@ -139,6 +141,17 @@ def create_result_df(
                 parsed_results = parse_results_dict(load_json(file_path))
 
                 # save relevant metadata and path in df
+                # "Prompting style is backward compatible for older results (else)"
+                prompt_format = (
+                    parsed_results.get("config_prompt_style_format")
+                    if parsed_results.get("config_prompt_style_format")
+                    else parsed_results.get("config_prompt_style")
+                )
+                prompt_connector = (
+                    parsed_results.get("config_prompt_style_connector")
+                    if parsed_results.get("config_prompt_style_connector")
+                    else parsed_results.get("config_prompt_connector")
+                )
                 res = [
                     task,
                     model_name,
@@ -149,8 +162,8 @@ def create_result_df(
                         if parsed_results.get("config_few_shot")
                         else 0
                     ),
-                    parsed_results.get("config_prompt_style"),
-                    parsed_results.get("config_prompt_connector"),
+                    prompt_format,
+                    prompt_connector,
                     file_path,
                     parsed_results["predictions_path"][
                         parsed_results["predictions_path"].find("results/") :
@@ -173,6 +186,7 @@ def create_result_df(
     )
     print(df.shape)
     if save_path:
+        print(f"Saving dataframe to {save_path}")
         df.to_csv(save_path, index=False)
     return df
 
@@ -217,7 +231,12 @@ def parse_results_dict(dct) -> dict:
     dct.pop("plots", None)
     config = dct.pop("config", {})
     for key, val in config.items():
-        dct[f"config_{key}"] = val
+        if isinstance(config[key], dict):
+            style_specs = config[key]  # config.pop(key, {})
+            for subkey, subval in style_specs.items():
+                dct[f"config_{key}_{subkey}"] = subval
+        else:
+            dct[f"config_{key}"] = val
 
     # Parse model name
     dct[model_col] = parse_model_name(dct[model_col])
@@ -230,6 +249,9 @@ def parse_results_dict(dct) -> dict:
     dct["base_name"] = get_base_name(dct[model_col])
     dct["is_inst"] = dct["base_name"] != dct[model_col]
 
+    for key, val in dct.items():
+        if isinstance(val, dict):
+            print(key, val)
     assert not any(isinstance(val, dict) for val in dct.values()), dct
     return dct
 
@@ -312,34 +334,6 @@ def get_metrics(json_path: str | Path, metrics: list[str]):
     """
     evals = load_json(json_path)
     return {metric: evals[metric] for metric in metrics}
-
-
-def load_baselines(baselines: dict, tasks: list, rerun: bool = False) -> tuple:
-    baseline_results_all_tasks = {}
-    baseline_risk_scores_all_tasks = {}
-    for task_name in tasks:
-        print(f"Loading baselines for {task_name}.")
-        results = {}
-        risk_scores = []
-        for clf_name, clf in baselines.items():
-            clf_path = BASELINE_RESULTS_PATH / f"{clf_name}_task-{task_name}"
-            if (clf_path).exists() and not rerun:
-                print(f"- {clf_name}: Load predictions from '{clf_path}'.")
-                scores = pd.read_csv(
-                    clf_path / f"{task_name}.test_predictions.csv", index_col=0
-                )
-                prediction_eval = load_json(
-                    path=clf_path / f"{task_name}-results.bench.json"
-                )
-            else:
-                print(f"Skipping {clf_name}")
-            results[clf_name] = prediction_eval
-            risk_scores.append(scores)
-
-        baseline_results_all_tasks[task_name] = results
-        baseline_risk_scores_all_tasks[task_name] = pd.concat(risk_scores, axis=1)
-
-    return baseline_risk_scores_all_tasks, baseline_results_all_tasks
 
 
 def truncate(num: float, digits: int = 6) -> float:
