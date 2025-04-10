@@ -1,18 +1,27 @@
 import os
 import re
-from .setup import ACS_TASKS, LLM_MODELS, BASELINE_RESULTS_PATH
+from .setup import ACS_TASKS, LLM_MODELS, BASELINE_RESULTS_PATH, model_families
 from folktexts._io import load_json, save_json
+from folktexts.llm_utils import get_model_size_B
+
 import pandas as pd
 from pathlib import Path
 import json
 
-## Utils
+# --------------------------------------
+# Utils
+# --------------------------------------
 
-model_to_key = lambda m: m.replace("/", "--")
-key_to_model = lambda m: m.replace("--", "/")
+
+def model_to_key(str: str):
+    return str.replace("/", "--")
 
 
-def prettify_model_name(name: str) -> str:
+def key_to_model(str: str):
+    return str.replace("--", "/")
+
+
+def prettify_model_name(model_name: str) -> str:
     """Get prettified version of the given model name."""
     dct = {
         # Google Gemma models
@@ -31,12 +40,13 @@ def prettify_model_name(name: str) -> str:
         "meta-llama/Meta-Llama-3-8B-Instruct": "Llama 3 8B (it)",
         "meta-llama/Meta-Llama-3.1-8B": "Llama 3.1 8B",
         "meta-llama/Meta-Llama-3.1-8B-Instruct": "Llama 3.1 8B (it)",
-        "meta-llama/Meta-Llama-3.1-70B": "Meta Llama 3.1 70B",
-        "meta-llama/Meta-Llama-3.1-70B-Instruct": "Meta Llama 3.1 70B (it)",
-        "meta-llama/Meta-Llama-3.2-1B": "Meta Llama 3.2 1B",
-        "meta-llama/Meta-Llama-3.2-1B-Instruct": "Meta Llama 3.2 1B (it)",
-        "meta-llama/Meta-Llama-3.2-3B": "Meta Llama 3.2 3B",
-        "meta-llama/Meta-Llama-3.2-3B-Instruct": "Meta Llama 3.2 3B (it)",
+        "meta-llama/Meta-Llama-3.1-70B": "Llama 3.1 70B",
+        "meta-llama/Meta-Llama-3.1-70B-Instruct": "Llama 3.1 70B (it)",
+        "meta-llama/Meta-Llama-3.2-1B": "Llama 3.2 1B",
+        "meta-llama/Meta-Llama-3.2-1B-Instruct": "Llama 3.2 1B (it)",
+        "meta-llama/Meta-Llama-3.2-3B": "Llama 3.2 3B",
+        "meta-llama/Meta-Llama-3.2-3B-Instruct": "Llama 3.2 3B (it)",
+        "meta-llama/Meta-Llama-3.3-70B-Instruct": "Llama 3.3 70B (it)",
         # Mistral AI models
         "mistralai/Mistral-7B-Instruct-v0.2": "Mistral 7B (it)",
         "mistralai/Mistral-7B-v0.1": "Mistral 7B",
@@ -44,6 +54,8 @@ def prettify_model_name(name: str) -> str:
         "mistralai/Mixtral-8x22B-v0.1": "Mixtral 8x22B",
         "mistralai/Mixtral-8x7B-Instruct-v0.1": "Mixtral 8x7B (it)",
         "mistralai/Mixtral-8x7B-v0.1": "Mixtral 8x7B",
+        "mistralai/Mistral-Small-24B-Base-2501": "Mistral Small 24B",
+        "mistralai/Mistral-Small-24B-Instruct-2501": "Mistral Small 24B (it)",
         # Yi models
         "01-ai/Yi-34B": "Yi 34B",
         "01-ai/Yi-34B-Chat": "Yi 34B (chat)",
@@ -57,6 +69,10 @@ def prettify_model_name(name: str) -> str:
         "Qwen/Qwen2-7B-Instruct": "Qwen 2 7B (it)",
         "Qwen/Qwen2-72B": "Qwen 2 72B",
         "Qwen/Qwen2-72B-Instruct": "Qwen 2 72B (it)",
+        "Qwen/Qwen2.5-7B": "Qwen 2.5 7B",
+        "Qwen/Qwen2.5-7B-Instruct": "Qwen 2.5 7B (it)",
+        "Qwen/Qwen2.5-72B": "Qwen 2.5 72B",
+        "Qwen/Qwen2.5-72B-Instruct": "Qwen 2.5 72B (it)",
         # Tabula
         "mlfoundations/tabula-8b": "Tabula 8B",
         # Olmo
@@ -69,11 +85,11 @@ def prettify_model_name(name: str) -> str:
         "allenai/OLMo-2-1124-7B-Instruct": "OLMo 2 7B (it)",
     }
 
-    if name in dct:
-        return dct[name]
+    if model_name in dct:
+        return dct[model_name]
     else:
-        print(f"Couldn't find prettified name for {name}.")
-        return name
+        print(f"Couldn't find prettified name for {model_name}.")
+        return model_name
 
 
 def is_instruction_tuned(model_name: str) -> bool:
@@ -87,6 +103,34 @@ def is_instruction_tuned(model_name: str) -> bool:
     """
     indicators = ["Instruct", "it", "Chat"]
     return any(ind in model_name for ind in indicators)
+
+
+def get_size(model_key):
+    # just a wrapper to facilitate imports
+    return get_model_size_B(model_key)
+
+
+def get_size_and_it(model_key, eps=0.001):
+    return get_model_size_B(model_key) + eps * int(is_instruction_tuned(model_key))
+
+
+def sort_by_size(models: list):
+    return sorted(models, key=get_size_and_it)
+
+
+def sort_by_size_and_family(models: list, factor=1000):
+    # factor to ensure model families are well separated
+    model_family_to_key = {k: v for v, k in enumerate(model_families, start=1)}
+
+    def sort_key(model_key):
+        return get_size_and_it(model_key) + factor * model_family_to_key.get(
+            next(
+                (mf for mf in model_families if mf.lower() in model_key.lower()), None
+            ),
+            -1,
+        )
+
+    return sorted(models, key=sort_key)
 
 
 def create_result_df(
@@ -156,6 +200,9 @@ def create_result_df(
                     task,
                     model_name,
                     int(is_instruction_tuned(model_name)),
+                    int(
+                        bool(parsed_results.get("threshold_fitted_on"))
+                    ),  # (bool), if True fitted on 500 data points
                     bench_hash,
                     (
                         parsed_results["config_few_shot"]
@@ -170,12 +217,21 @@ def create_result_df(
                     ],
                 ]
                 results_all_tasks.append(res)
+                if (
+                    bool(parsed_results.get("threshold_fitted_on"))
+                    and parsed_results.get("threshold") == 0.5
+                ):  # fitting did overwrite the non-fitted results (hash unchanged)
+                    tmp = res.copy()
+                    tmp[3] = 0
+                    results_all_tasks.append(tmp)
+
     df = pd.DataFrame(
         results_all_tasks,
         columns=[
             "task",
             "model",
             "is_inst",
+            "threshold_fitted",
             "bench_hash",
             "num_shots",
             "prompt_style",
@@ -189,6 +245,23 @@ def create_result_df(
         print(f"Saving dataframe to {save_path}")
         df.to_csv(save_path, index=False)
     return df
+
+
+def infer_treshold_fitted(file_path):
+    print("deprecated, threshold fitting is now documented in results")
+    print("Inferring whether threshold was fitted from file structure, prone to error.")
+    # infer whether the treshold was fitted on training examples based on
+    # - whether there are test_predictions in the same folder
+    # - if so, check if there is another folder
+    # e.g. BRFSS_Blood_Pressure_full_seed-42_hash-3784204307.test_predictions.csv
+    pattern_csv = r".*\.test_predictions\.csv$"
+    csv_file = list(find_files(Path(file_path).parent, pattern=pattern_csv))
+    # print("Infer if thrshold was fitted", Path(file_path).parent, csv_file)
+    if len(csv_file) > 0:
+        # check if there is another result folder
+        print("found prediction file, but need to check for other folder")
+    else:
+        return len(csv_file) == 0
 
 
 def find_files(root_folder, pattern, dir_pattern=""):
@@ -283,23 +356,30 @@ def load_risk_scores(csv_path: str | Path) -> pd.DataFrame:
     return risk_score
 
 
-def get_predictions(csv_path: str | Path) -> pd.DataFrame:
+def get_predictions(
+    csv_path: str | Path,
+    eval_json_path: str | Path = None,
+) -> pd.DataFrame:
     """
     Loads risk scores and binarize usiing binarization threshold from
     evaluation results. Returns a DataFrame.
 
     Args:
         csv_path (str | Path): The file path to the CSV containing risk scores.
+        eval_json_path (str | Path): If stored elsewhere, file path to the json containing evals including the threshold.
 
     Returns:
         pd.DataFrame: A DataFrame with binarized predictions.
     """
     risk_scores = load_risk_scores(csv_path)
     # binarize using threshold from respective eval results
-    bench_hash = Path(csv_path).parent.as_posix().split("bench-")[1]
-    threshold = load_json(
-        Path(csv_path).parent / f"results.bench-{bench_hash}.json"
-    ).get("threshold")
+    if not eval_json_path:
+        bench_hash = Path(csv_path).parent.as_posix().split("bench-")[1]
+        threshold = load_json(
+            Path(csv_path).parent / f"results.bench-{bench_hash}.json"
+        ).get("threshold")
+    else:
+        threshold = load_json(Path(eval_json_path)).get("threshold")
     if threshold is None:
         print(f"Threshold not found for {csv_path}, defaulting to 0.5")
         threshold = 0.5
@@ -338,3 +418,8 @@ def get_metrics(json_path: str | Path, metrics: list[str]):
 
 def truncate(num: float, digits: int = 6) -> float:
     return round(num - 10**-digits / 2, digits)
+
+
+def binarize_using_threshold(col, evals: dict):
+    m = col.name
+    return col > evals[m]["threshold"]
