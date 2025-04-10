@@ -1,14 +1,16 @@
-## Measure reourse
+# Measure reourse
 # Collect all analysis functionalities
+
 from typing import List, Union
 import pandas as pd
 import torch
-import numpy as np
-
+import itertools
 import more_itertools
-from functools import reduce
-from operator import mul, add
 import logging
+
+# import numpy as np
+# from functools import reduce
+# from operator import mul, add
 
 
 def poisson_binom_agreement(
@@ -68,26 +70,33 @@ def poisson_binom_agreement(
         raise NotImplementedError("Simulated expectation is not yet implemented")
 
 
-def expected_agreement_two_models(acc1: float, acc2: float) -> float:
+def expected_pairwise_agreement(acc1: float, acc2: float) -> float:
     return acc1 * acc2 + (1 - acc1) * (1 - acc2)
 
 
-## AGREEMENT RATES
+def expected_agreement_modelset(model_accuracies: dict | list, k: int = None):
+    # if not k, compute for every possible k
+    pass
 
 
-def get_observed_agreement(
+# -------------------------------------------------------------
+# AGREEMENT RATES
+# -------------------------------------------------------------
+
+
+def get_observed_pairwise_agreement(
     predictions_m1: Union[pd.DataFrame, torch.Tensor],
     predictions_m2: Union[pd.DataFrame, torch.Tensor],
 ) -> float:
     assert (
         predictions_m1.shape == predictions_m2.shape
     ), "Dataframes have different shapes"
-    assert predictions_m1.shape[1] == 1, "Only one column expected"
+    # assert predictions_m1.shape[1] <= 1, "Only one column expected"
     num_samples = predictions_m1.shape[0]
     observed_agreement = (predictions_m1.values == predictions_m2.values).sum(
         axis=0
     ) / num_samples
-    return float(observed_agreement[0])
+    return observed_agreement  # float(observed_agreement[0])
 
 
 def get_pairwise_neg_agreement(
@@ -101,7 +110,7 @@ def get_pairwise_neg_agreement(
     observed_agreement = (
         (predictions_m1 == 0).values & (predictions_m2 == 0).values
     ).sum(axis=0) / num_samples
-    return float(observed_agreement[0])
+    return observed_agreement  # float(observed_agreement[0])
 
 
 def get_pairwise_pos_agreement(
@@ -115,4 +124,38 @@ def get_pairwise_pos_agreement(
     observed_agreement = (
         (predictions_m1 == 1).values & (predictions_m2 == 1).values
     ).sum(axis=0) / num_samples
-    return float(observed_agreement[0])
+    return observed_agreement  # float(observed_agreement[0])
+
+
+def get_agreement_matrix(models, dictionary: dict, fun: callable):
+    matrix = torch.zeros(len(models), len(models))
+    for i, mi in enumerate(models):
+        for j in range(i, len(models)):
+            mj = models[j]
+            matrix[i][j] = fun(dictionary[mi], dictionary[mj])
+            matrix[j][i] = matrix[i][j]
+    return matrix
+
+
+# ---------------
+# UTILS
+# ----------------
+
+
+def matrix_pairwise_evals(models, fun, only_lower_diag=True):
+    """evaluate function on each pair of models"""
+    num_models = len(models)
+    model_combinations = list(
+        itertools.combinations_with_replacement(range(num_models), 2)
+    )  # _with_replacement only to add diagonal
+
+    matrix = torch.zeros(num_models, num_models).fill_(torch.nan)
+    for idx1, idx2 in model_combinations:
+        m1 = models[idx1]
+        m2 = models[idx2]
+        matrix[idx1, idx2] = fun(m1, m2)
+        if not only_lower_diag:
+            matrix[idx2, idx1] = matrix[idx1, idx2]
+
+    # return lower diagonal ma
+    return matrix.T
