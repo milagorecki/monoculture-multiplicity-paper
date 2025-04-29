@@ -90,6 +90,7 @@ LLM_MODELS = [
     # Tabula
     # "mlfoundations/tabula-8b",
 ]
+
 model_families_coarse = sorted(
     [
         "Gemma",
@@ -127,8 +128,28 @@ baselines = {
 BASELINE_RESULTS_PATH = Path("./results/baselines")
 
 
-# What changes were made to the prompts
-prompt_styles = ["bullet", "text"]
-prompt_connectors = ["is", ":", "="]
-prompt_connectors_extended = ["is", ":", "=", "text"]
-shots = [0, 3, 5]
+# --------------------------------------------------
+# Prompting Changes
+# --------------------------------------------------
+num_shots = [0, 10]
+
+formats = ["bullet", "text", "comma"]  # , "textbullet"
+connectors = ["is", "=", ":"]
+granularities = ["original", "low"]
+feature_order = [
+    "AGEP,COW,SCHL,MAR,OCCP,POBP,RELP,WKHP,SEX,RAC1P",  # original
+    "RAC1P,WKHP,AGEP,SCHL,MAR,SEX,RELP,POBP,COW,OCCP",
+    "WKHP,OCCP,RAC1P,MAR,AGEP,RELP,SCHL,POBP,COW,SEX",
+    "AGEP,SCHL,OCCP,MAR,COW,WKHP,RAC1P,RELP,SEX,POBP",
+    "RAC1P,SEX,WKHP,RELP,POBP,OCCP,MAR,SCHL,COW,AGEP",  # reversed
+]
+map_feature_order_to_short = dict(
+    zip(feature_order, ["default", "rand 1", "rand 2", "rand 3", " reversed"])
+)
+map_short_to_feature_order = {v: k for k, v in map_feature_order_to_short.items()}
+variations = {
+    "format": formats,
+    "connector": connectors,
+    "granularity": granularities,
+    "feature_order": list(map(lambda o: map_feature_order_to_short[o], feature_order)),
+}

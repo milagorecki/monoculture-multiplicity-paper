@@ -5,86 +5,39 @@ from typing import List, Union
 import pandas as pd
 import torch
 import itertools
-import more_itertools
-import logging
+
+# import more_itertools
+# import logging
+import scipy as sp
 
 # import numpy as np
 # from functools import reduce
 # from operator import mul, add
-
-
-def poisson_binom_agreement(
-    fn_rates: Union[List[float], torch.Tensor],
-    k: int,
-    epsilon: float = 0.0001,
-):
-    """
-    Poisson Binomal Model: Assume each model to correspond to an independent Bernoulli trial with the sucess probability given by the TPR (1-FNR). What is the probability of k models to reject?
-    """
-    M = len(fn_rates)
-    # make sure none of the rates is exactly 0 or 1, otherwise one term will set whole product to 0 --- test line length
-    fn_rates = torch.Tensor(
-        [r + (epsilon * (r == 0)) - (epsilon * (r == 1)) for r in fn_rates]
-    )
-
-    if M <= 30:
-        logging.info("Computing exact expectation using closed form.")
-        # created initial list to indicate which model rejects
-        rej_indicators = torch.concat(
-            [torch.ones(k, dtype=bool), torch.zeros(M - k, dtype=bool)]
-        ).tolist()
-        # get all unique permutations of k rejections
-        logging.info(f"Getting distinct permutations for {M} models and {k} rejects")
-        unique_permutations = list(more_itertools.distinct_permutations(rej_indicators))
-
-        logging.debug(
-            f"Compute probabilities under Poisson binomal model for {len(unique_permutations)} distinct permutations"
-        )
-        permutation_mat = torch.Tensor(unique_permutations).bool()
-        fn_rates_permut = torch.matmul(permutation_mat.float(), torch.diag(fn_rates))
-        tp_rates_permut = torch.matmul(
-            (~permutation_mat).float(), torch.diag(1 - fn_rates)
-        )
-
-        # products = []
-        # for indices in unique_permutations:
-        #     # for each permutations, compute the product of fnrs
-        #     fnr_or_tpr_based_on_permutation = [
-        #         p ** indices[i] * (1 - p) ** (1 - indices[i])
-        #         for i, p in enumerate(fn_rates)
-        #     ]
-        #     print(indices, fnr_or_tpr_based_on_permutation)
-        #     products.append(
-        #         reduce(
-        #             mul,
-        #             fnr_or_tpr_based_on_permutation,
-        #         )
-        #     )
-        # sum over all permutations
-        # return reduce(add, products)
-        return torch.prod(tp_rates_permut + fn_rates_permut, axis=1).sum(axis=0).item()
-    else:
-        logging.info(
-            f"M too large, Estimate expectation by sampling fixed number of permutations."
-        )
-        raise NotImplementedError("Simulated expectation is not yet implemented")
-
-
-def expected_pairwise_agreement(acc1: float, acc2: float) -> float:
-    return acc1 * acc2 + (1 - acc1) * (1 - acc2)
-
-
-def expected_agreement_modelset(model_accuracies: dict | list, k: int = None):
-    # if not k, compute for every possible k
-    pass
-
 
 # -------------------------------------------------------------
 # AGREEMENT RATES
 # -------------------------------------------------------------
 
 
-def get_observed_pairwise_agreement(
+# AGREEMENT AT RANDOM
+def poisson_binom_agreement(
+    baseline_rate: Union[List[float], torch.Tensor],
+    k: int,
+):
+    """
+    Poisson Binomal Model: Assume each model to correspond to an independent
+    Bernoulli trial with the sucess probability given by the TPR (1-FNR).
+    What is the probability of k models to reject?
+    """
+    return sp.stats.poisson_binom.pmf(k=k, p=baseline_rate)
+
+
+def pairwise_agreement_at_random(acc1: float, acc2: float) -> float:
+    return acc1 * acc2 + (1 - acc1) * (1 - acc2)
+
+
+# AGREEMENT OBSERVED
+def get_observed_pairwise_agreement_rate(
     predictions_m1: Union[pd.DataFrame, torch.Tensor],
     predictions_m2: Union[pd.DataFrame, torch.Tensor],
 ) -> float:
@@ -99,7 +52,7 @@ def get_observed_pairwise_agreement(
     return observed_agreement  # float(observed_agreement[0])
 
 
-def get_pairwise_neg_agreement(
+def get_pairwise_neg_agreement_rate(
     predictions_m1: Union[pd.DataFrame, torch.Tensor],
     predictions_m2: Union[pd.DataFrame, torch.Tensor],
 ) -> float:
@@ -113,7 +66,7 @@ def get_pairwise_neg_agreement(
     return observed_agreement  # float(observed_agreement[0])
 
 
-def get_pairwise_pos_agreement(
+def get_pairwise_pos_agreement_rate(
     predictions_m1: Union[pd.DataFrame, torch.Tensor],
     predictions_m2: Union[pd.DataFrame, torch.Tensor],
 ) -> float:
@@ -125,6 +78,124 @@ def get_pairwise_pos_agreement(
         (predictions_m1 == 1).values & (predictions_m2 == 1).values
     ).sum(axis=0) / num_samples
     return observed_agreement  # float(observed_agreement[0])
+
+
+def observed_agreement_wrapper(
+    m1: str,
+    m2: str,
+    predictions: pd.DataFrame,
+    fun=get_observed_pairwise_agreement_rate,
+):
+    assert (m1 in predictions.columns) & (
+        m2 in predictions.columns
+    ), "Both models must be present as column in predictions"
+
+    return fun(
+        predictions[m1],
+        predictions[m2],
+    )
+
+
+def ratio_agreement_wrapper(m1, m2, predictions, evals, metric="accuracy"):
+    assert (m1 in predictions.columns) & (
+        m2 in predictions.columns
+    ), "Both models must be present as column in predictions"
+
+    observed = observed_agreement_wrapper(
+        m1, m2, predictions, fun=get_observed_pairwise_agreement_rate
+    )
+    expected = pairwise_agreement_at_random(
+        evals[metric][m1],
+        evals[metric][m2],
+    )
+    return observed / expected
+
+
+def diff_agreement_wrapper(m1, m2, predictions, evals, metric="accuracy"):
+    assert (m1 in predictions.columns) & (
+        m2 in predictions.columns
+    ), "Both models must be present as column in predictions"
+
+    observed = observed_agreement_wrapper(
+        m1, m2, predictions, fun=get_observed_pairwise_agreement_rate
+    )
+    expected = pairwise_agreement_at_random(
+        evals[metric][m1],
+        evals[metric][m2],
+    )
+    return observed - expected
+
+
+def get_observed_k_rejections(
+    k: int,
+    predictions: pd.DataFrame,
+    restrict_only_pos_instances=False,
+    restrict_only_neg_instances=False,
+    true_labels: pd.Series = None,
+):
+    N, M = predictions.shape
+
+    assert not (restrict_only_pos_instances and restrict_only_neg_instances)
+    if restrict_only_pos_instances:
+        assert true_labels is not None, "Provide labels to restrict data."
+        predictions = predictions[true_labels == 1]
+    elif restrict_only_neg_instances:
+        assert true_labels is not None, "Provide labels to restrict data."
+        predictions = predictions[true_labels == 1]
+    sum_rejected = M - predictions.sum(axis=1)
+    return sum_rejected[sum_rejected == k].shape[0]
+
+
+def get_observed_acceptance_df(
+    predictions: pd.DataFrame,
+    restrict_only_pos_instances=False,
+    restrict_only_neg_instances=False,
+    true_labels: pd.Series = None,
+    padding=True,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    N, M = predictions.shape
+
+    assert not (restrict_only_pos_instances and restrict_only_neg_instances)
+    if restrict_only_pos_instances:
+        assert true_labels is not None, "Provide labels to restrict data."
+        predictions = predictions[true_labels == 1]
+    elif restrict_only_neg_instances:
+        assert true_labels is not None, "Provide labels to restrict data."
+        predictions = predictions[true_labels == 0]
+    sum_accepted = predictions.sum(axis=1)
+    num_models_accepting, counts = torch.Tensor(sum_accepted.values).unique(
+        return_counts=True
+    )
+
+    if padding:
+        counts_padded = torch.zeros(M + 1)
+        for i in range(len(num_models_accepting)):
+            counts_padded[int(num_models_accepting[i])] = counts[i]
+        return torch.arange(M + 1), counts_padded
+
+    return num_models_accepting, counts
+
+
+def get_observed_rejections_df(
+    predictions: pd.DataFrame,
+    restrict_only_pos_instances=False,
+    restrict_only_neg_instances=False,
+    true_labels: pd.Series = None,
+    padding=True,
+):
+    N, M = predictions.shape
+
+    num_models_accepting, counts = get_observed_acceptance_df(
+        predictions,
+        restrict_only_pos_instances,
+        restrict_only_neg_instances,
+        true_labels,
+        padding,
+    )
+    num_models_rejecting = num_models_accepting
+    counts = counts.flip(dims=[0])
+
+    return num_models_rejecting, counts
 
 
 def get_agreement_matrix(models, dictionary: dict, fun: callable):
