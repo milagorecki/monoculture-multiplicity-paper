@@ -502,6 +502,8 @@ def plot_agreement_lineplot(
     agreements_exp: torch.Tensor | np.ndarray,
     sort_by=None,
     title="",
+    plot_scatter=False,
+    ylim=(0.0, 1.0),
 ):
     if isinstance(agreements_observed, torch.Tensor):
         agreements_observed = agreements_observed.numpy()
@@ -531,12 +533,14 @@ def plot_agreement_lineplot(
         label="monoculture",
         color="red",
     )
-    ax.plot(fraction_model_pairs, agreements_observed, label="observed")
-    ax.plot(fraction_model_pairs, agreements_exp, label="random error")
+    scatter_args = {"marker": "o", "markersize": 3} if plot_scatter else {}
+    ax.plot(fraction_model_pairs, agreements_observed, label="observed", **scatter_args)
+    ax.plot(fraction_model_pairs, agreements_exp, label="random error", **scatter_args)
+
     ax.plot(
         fraction_model_pairs,
         np.zeros_like(agreements_observed) + 0.5,
-        label="chance level",
+        label="coin flip",  # "chance level",
         color="grey",
         linestyle="dashed",
         linewidth=1,
@@ -549,6 +553,6 @@ def plot_agreement_lineplot(
         color="lightgrey",
         alpha=0.4,
     )
-    ax.set_ylim(bottom=0, top=1.01)
+    ax.set_ylim(bottom=ylim[0], top=ylim[1] + 0.01)
     ax.set_title(title.replace("ACS", "ACS ").replace("_", " "))
     return ax
