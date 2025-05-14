@@ -5,10 +5,13 @@ from typing import List, Union
 import pandas as pd
 import torch
 import itertools
+import numpy as np
 
 # import more_itertools
 # import logging
 import scipy as sp
+from .setup import LLM_MODELS
+from .utils import key_to_model
 
 # import numpy as np
 # from functools import reduce
@@ -27,7 +30,7 @@ def poisson_binom_agreement(
     """
     Poisson Binomal Model: Assume each model to correspond to an independent
     Bernoulli trial with the sucess probability given by the TPR (1-FNR).
-    What is the probability of k models to reject?
+    What is the probability of k models to accept (TPR as baseline_rate)?
     """
     return sp.stats.poisson_binom.pmf(k=k, p=baseline_rate)
 
@@ -126,6 +129,15 @@ def diff_agreement_wrapper(m1, m2, predictions, evals, metric="accuracy"):
     return observed - expected
 
 
+def get_fraction_no_recourse(predictions_array: Union[np.array, torch.Tensor]):
+    if isinstance(predictions_array, torch.Tensor):
+        predictions_array = predictions_array.to_numpy()
+    return (
+        np.sum(np.bitwise_or.reduce(predictions_array, axis=1) == 0)
+        / predictions_array.shape[0]
+    )
+
+
 def get_observed_k_rejections(
     k: int,
     predictions: pd.DataFrame,
@@ -146,13 +158,32 @@ def get_observed_k_rejections(
     return sum_rejected[sum_rejected == k].shape[0]
 
 
-def get_observed_acceptance_df(
+def get_obs_agreement_counts(
     predictions: pd.DataFrame,
+    restrict_only_pos_instances=False,
+    restrict_only_neg_instances=False,
+    true_labels: pd.Series = None,
+):
+    assert not (restrict_only_pos_instances and restrict_only_neg_instances)
+    if restrict_only_pos_instances:
+        assert true_labels is not None, "Provide labels to restrict data."
+        predictions = predictions[true_labels == 1]
+    elif restrict_only_neg_instances:
+        assert true_labels is not None, "Provide labels to restrict data."
+        predictions = predictions[true_labels == 0]
+    num_accepting = predictions.sum(axis=1).values
+    return num_accepting
+
+
+def get_obs_acceptance_aggregated(
+    predictions: Union[pd.DataFrame, torch.Tensor, np.array],
     restrict_only_pos_instances=False,
     restrict_only_neg_instances=False,
     true_labels: pd.Series = None,
     padding=True,
 ) -> tuple[torch.Tensor, torch.Tensor]:
+    if isinstance(predictions, pd.DataFrame):
+        predictions = predictions.to_numpy()
     N, M = predictions.shape
 
     assert not (restrict_only_pos_instances and restrict_only_neg_instances)
@@ -162,8 +193,9 @@ def get_observed_acceptance_df(
     elif restrict_only_neg_instances:
         assert true_labels is not None, "Provide labels to restrict data."
         predictions = predictions[true_labels == 0]
-    sum_accepted = predictions.sum(axis=1)
-    num_models_accepting, counts = torch.Tensor(sum_accepted.values).unique(
+    counts_accepting = predictions.sum(axis=1)
+    # aggregate
+    num_models_accepting, counts = torch.Tensor(counts_accepting).unique(
         return_counts=True
     )
 
@@ -176,7 +208,7 @@ def get_observed_acceptance_df(
     return num_models_accepting, counts
 
 
-def get_observed_rejections_df(
+def get_obs_rejections_aggregated(
     predictions: pd.DataFrame,
     restrict_only_pos_instances=False,
     restrict_only_neg_instances=False,
@@ -185,7 +217,7 @@ def get_observed_rejections_df(
 ):
     N, M = predictions.shape
 
-    num_models_accepting, counts = get_observed_acceptance_df(
+    num_models_accepting, counts = get_obs_acceptance_aggregated(
         predictions,
         restrict_only_pos_instances,
         restrict_only_neg_instances,
@@ -206,6 +238,30 @@ def get_agreement_matrix(models, dictionary: dict, fun: callable):
             matrix[i][j] = fun(dictionary[mi], dictionary[mj])
             matrix[j][i] = matrix[i][j]
     return matrix
+
+
+def get_ambiguity(predictions: pd.DataFrame):
+    # assume every column contains the predictions of one model
+    N, M = predictions.shape
+    num_accept = predictions.sum(axis=1)
+    # count how often at least 1 model disagrees (1 to (M-1) accepts)
+    return num_accept[(num_accept > 0) & (num_accept < M)].shape[0] / N
+
+
+def get_discrepancy(predictions: pd.DataFrame):
+    # assume every column contains the predictions of one model
+    # find max number of different predictions between any two columns (Hamming dist)
+    N, M = predictions.shape
+    assert all(
+        [key_to_model(col) in LLM_MODELS for col in predictions.columns]
+    ), "Columns should be only model predictions (column name = model key)."
+
+    max_diff = 0
+    for col1, col2 in itertools.combinations(predictions, 2):
+        diff = (predictions[col1] != predictions[col2]).sum()
+        max_diff = max(max_diff, diff)
+
+    return max_diff / N
 
 
 # ---------------

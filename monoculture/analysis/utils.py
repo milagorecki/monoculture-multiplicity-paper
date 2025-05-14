@@ -1,12 +1,22 @@
 import os
 import re
-from .setup import ACS_TASKS, LLM_MODELS, BASELINE_RESULTS_PATH, model_families
-from folktexts._io import load_json, save_json
+from .setup import (
+    ACS_TASKS,
+    TABLESHIFT_TASKS,
+    model_families,
+    variations,
+    map_feature_order_to_short,
+)  # LLM_MODELS, BASELINE_RESULTS_PATH,
+import folktexts
+from folktexts._io import load_json  # , save_json
 from folktexts.llm_utils import get_model_size_B
+from folktexts.acs import ACSTaskMetadata, ACSDataset
+from folktexts.ts import TableshiftBRFSSTaskMetadata, TableshiftBRFSSDataset
 
+import torch
 import pandas as pd
 from pathlib import Path
-import json
+import logging
 
 # --------------------------------------
 # Utils
@@ -21,7 +31,7 @@ def key_to_model(str: str):
     return str.replace("--", "/")
 
 
-def prettify_model_name(model_name: str) -> str:
+def prettify_model_name(model_hf_name: str) -> str:
     """Get prettified version of the given model name."""
     dct = {
         # Google Gemma models
@@ -85,14 +95,14 @@ def prettify_model_name(model_name: str) -> str:
         "allenai/OLMo-2-1124-7B-Instruct": "OLMo 2 7B (it)",
     }
 
-    if model_name in dct:
-        return dct[model_name]
+    if model_hf_name in dct:
+        return dct[model_hf_name]
     else:
-        print(f"Couldn't find prettified name for {model_name}.")
-        return model_name
+        print(f"Couldn't find prettified name for {model_hf_name}.")
+        return model_hf_name
 
 
-def is_instruction_tuned(model_name: str) -> bool:
+def is_instruction_tuned(model_hf_name: str) -> bool:
     """Indicator if a model is instruction tuned (solely inferred from the model name).
 
     Args:
@@ -102,7 +112,7 @@ def is_instruction_tuned(model_name: str) -> bool:
         bool: model is instruction-finetuned
     """
     indicators = ["Instruct", "it", "Chat"]
-    return any(ind in model_name for ind in indicators)
+    return any(ind in model_hf_name for ind in indicators)
 
 
 def get_size(model_key):
@@ -161,11 +171,24 @@ def create_result_df(
             - is_inst: int, whether the model is instruction-finetuned
             - bench_hash: str, hash of the benchmarking result
             - num_shots: int, number of shots used for few-shot prompting
-            - prompt_style: str, style of the prompt used
-            - prompt_connector: str, connector used for the prompt
+            - prompt_format: str, format used for prompts if specified (if None: bullet)
+            - prompt_connector: str, connector used for prompts if specified (if None: is)
+            - prompt_granularity: str, low/original granularity used for the prompt if specified (if None: orginal)
+            - prompt_feature_order: str/list, order in which features are presented in prompt (if None: orginal order)
             - eval_results_path: str, path to the evaluation results file
             - predictions_path: str, path to the predictions file
     """
+    assert (
+        isinstance(subfolders, list)
+        or isinstance(subfolders, tuple)
+        or isinstance(subfolders, str)
+    )
+    assert isinstance(tasks, list) or isinstance(tasks, tuple) or isinstance(tasks, str)
+    if isinstance(subfolders, str):
+        subfolders = [subfolders]
+    if isinstance(tasks, str):
+        tasks = [tasks]
+
     results_all_tasks = []
     for task in tasks:
         for folder in subfolders:
@@ -185,17 +208,40 @@ def create_result_df(
                 parsed_results = parse_results_dict(load_json(file_path))
 
                 # save relevant metadata and path in df
-                # "Prompting style is backward compatible for older results (else)"
-                prompt_format = (
-                    parsed_results.get("config_prompt_style_format")
-                    if parsed_results.get("config_prompt_style_format")
-                    else parsed_results.get("config_prompt_style")
+                # "Prompting style is backward compatible for older results json files"
+                prompt_format = next(
+                    (
+                        parsed_results[key]
+                        for key in (
+                            "config_prompt_variation_format",
+                            "config_prompt_style_format",
+                            "config_prompt_style",
+                        )
+                        if key in parsed_results
+                    ),
+                    "bullet",  # or raise error
                 )
-                prompt_connector = (
-                    parsed_results.get("config_prompt_style_connector")
-                    if parsed_results.get("config_prompt_style_connector")
-                    else parsed_results.get("config_prompt_connector")
+                prompt_connector = next(
+                    (
+                        parsed_results[key]
+                        for key in (
+                            "config_prompt_variation_connector",
+                            "config_prompt_style_connector",
+                            "config_prompt_connector",
+                        )
+                        if key in parsed_results
+                    ),
+                    "is",
                 )
+                prompt_granularity = parsed_results.get(
+                    "config_prompt_variation_granularity", "original"
+                )
+                prompt_feature_order = map_feature_order_to_short.get(
+                    parsed_results.get("config_prompt_variation_order"), "default"
+                )
+                threshold = get_metric(file_path, metric="threshold")
+                accuracy = get_metric(file_path, metric="accuracy")
+
                 res = [
                     task,
                     model_name,
@@ -203,6 +249,8 @@ def create_result_df(
                     int(
                         bool(parsed_results.get("threshold_fitted_on"))
                     ),  # (bool), if True fitted on 500 data points
+                    threshold,
+                    accuracy,
                     bench_hash,
                     (
                         parsed_results["config_few_shot"]
@@ -211,6 +259,8 @@ def create_result_df(
                     ),
                     prompt_format,
                     prompt_connector,
+                    prompt_granularity,
+                    prompt_feature_order,
                     file_path,
                     parsed_results["predictions_path"][
                         parsed_results["predictions_path"].find("results/") :
@@ -232,15 +282,33 @@ def create_result_df(
             "model",
             "is_inst",
             "threshold_fitted",
+            "threshold",
+            "accuracy",
             "bench_hash",
             "num_shots",
-            "prompt_style",
+            "prompt_format",
             "prompt_connector",
+            "prompt_granularity",
+            "prompt_feature_order",
             "eval_results_path",
             "predictions_path",
         ],
     )
-    print(df.shape)
+    print("Shape of df: ", df.shape)
+    # some checks
+
+    assert set(df["prompt_format"].unique()).issubset(
+        set(variations["format"])
+    ), f"{set(df['prompt_format'].unique())}, {set(variations['format'])}"
+    assert set(df["prompt_connector"].unique()).issubset(
+        set(variations["connector"])
+    ), f"{set(df['prompt_connector'].unique())}, {set(variations['connector'])}"
+    assert set(df["prompt_granularity"].unique()).issubset(
+        set(variations["granularity"])
+    ), f"{set(df['prompt_granularity'].unique())}, {set(variations['granularity'])}"
+    assert set(df["prompt_feature_order"].unique()).issubset(
+        set(variations["feature_order"])
+    ), f"{set(df['prompt_feature_order'].unique())}, {set(variations['feature_order'])}"
     if save_path:
         print(f"Saving dataframe to {save_path}")
         df.to_csv(save_path, index=False)
@@ -248,7 +316,7 @@ def create_result_df(
 
 
 def infer_treshold_fitted(file_path):
-    print("deprecated, threshold fitting is now documented in results")
+    logging.warning("deprecated, threshold fitting is now documented in results")
     print("Inferring whether threshold was fitted from file structure, prone to error.")
     # infer whether the treshold was fitted on training examples based on
     # - whether there are test_predictions in the same folder
@@ -381,7 +449,7 @@ def get_predictions(
     else:
         threshold = load_json(Path(eval_json_path)).get("threshold")
     if threshold is None:
-        print(f"Threshold not found for {csv_path}, defaulting to 0.5")
+        logging.warning(f"Threshold not found for {csv_path}, defaulting to 0.5")
         threshold = 0.5
     return risk_scores.map(lambda x: int(x >= threshold))
 
@@ -416,6 +484,15 @@ def get_metrics(json_path: str | Path, metrics: list[str]):
     return {metric: evals[metric] for metric in metrics}
 
 
+def cumulative_sum(tensor: torch.Tensor, end=None):
+    if end == "left":
+        # from right to left (total at xmin)
+        return torch.flip(torch.cumsum(torch.flip(tensor, dims=[0]), dim=0), dims=[0])
+    else:
+        # from left to right (total at xmax)
+        return torch.cumsum(tensor, dim=0)
+
+
 def truncate(num: float, digits: int = 6) -> float:
     return round(num - 10**-digits / 2, digits)
 
@@ -423,3 +500,71 @@ def truncate(num: float, digits: int = 6) -> float:
 def binarize_using_threshold(col, evals: dict):
     m = col.name
     return col > evals[m]["threshold"]
+
+
+def load_task_data(tasks: str | list, data_dir: Path | str):
+    if isinstance(tasks, str):
+        tasks = [tasks]
+    if isinstance(data_dir, str):
+        data_dir = Path(data_dir)
+    data = {}
+    for task in tasks:
+        print(task)
+        logging.info(f"Loading data for task {task}.")
+        if task in ACS_TASKS:
+            acs_task = ACSTaskMetadata.get_task(task)
+            acs_dataset_configs = (
+                folktexts.benchmark.Benchmark.ACS_DATASET_CONFIGS.copy()
+            )
+            acs_dataset = ACSDataset.make_from_task(
+                task=acs_task, cache_dir=data_dir, **acs_dataset_configs
+            )
+            X_test, y_test = acs_dataset.get_data_split("test")
+            data[task] = (X_test, y_test)
+        else:
+            brfss_task = TableshiftBRFSSTaskMetadata.get_task(task)
+            dataset_configs = (
+                folktexts.benchmark.Benchmark.TABLESHIFT_DATASET_CONFIGS.copy()
+            )
+            ts_dataset = TableshiftBRFSSDataset.make_from_task(
+                task=brfss_task, cache_dir=data_dir, **dataset_configs
+            )
+            X_test, y_test = ts_dataset.get_data_split("test")
+            data[task] = (X_test, y_test)
+    return data
+
+
+def load_model_outputs_same_prompt(
+    df: pd.DataFrame,
+    tasks: list[str] = ACS_TASKS + TABLESHIFT_TASKS,
+    return_risk_scores: bool = True,
+):
+    outputs = {}
+    for task in tasks:
+        task_df = df[df["task"] == task]
+        # get available models
+        models = task_df["model"].unique().tolist()
+        models.sort(key=lambda m: get_model_size_B(m) + int(is_instruction_tuned(m)))
+        outputs_per_task = []
+        for m in models:
+            data_m = task_df[task_df["model"] == m]
+            if data_m.shape[0] != 1:
+                logging.warning(
+                    f"Expected 1 row for model {m}, but found {data_m.shape[0]}. Skipping this model.\n {data_m}"
+                )
+                continue
+            if return_risk_scores:
+                outputs_per_task.append(
+                    load_risk_scores(data_m.iloc[0]["predictions_path"])
+                )
+            else:
+                outputs_per_task.append(
+                    get_predictions(
+                        csv_path=data_m.iloc[0]["predictions_path"],
+                        eval_json_path=data_m.iloc[0]["eval_results_path"],
+                    )
+                )
+        logging.debug(task, len(outputs_per_task))
+        if len(outputs_per_task) > 0:
+            outputs[task] = pd.concat(outputs_per_task, axis=1)
+    return outputs

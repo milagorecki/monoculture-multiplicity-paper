@@ -8,8 +8,13 @@ import pandas as pd
 import numpy as np
 from typing import Tuple, Callable
 from matplotlib import axes
-from .utils import prettify_model_name, key_to_model, get_size_and_it
-from .metrics import get_observed_acceptance_df, get_observed_rejections_df
+from .utils import prettify_model_name, key_to_model, get_size_and_it, cumulative_sum
+from .metrics import (
+    poisson_binom_agreement,
+    get_obs_agreement_counts,
+    get_obs_acceptance_aggregated,
+    get_obs_rejections_aggregated,
+)
 from pathlib import Path
 import matplotlib.colors as pltcolors
 import logging
@@ -161,13 +166,17 @@ def plot_neg_predicted(
 ):
     x_labels = []
     n_samples = evals[task].get("n_samples")
-    num_pred_negatives = evals[task].get("num_pred_negatives")
-    assert set(n_samples.keys()) == set(num_pred_negatives.keys())
-    for idx, model_key in enumerate(num_pred_negatives.keys()):
+    num_pred_negatives = sorted(
+        evals[task].get("num_pred_negatives").items(),
+        key=lambda item: get_size_and_it(item[0]),
+    )
+    assert set(n_samples.keys()) == set(dict(num_pred_negatives).keys())
+
+    for idx, (model_key, num_neg) in enumerate(num_pred_negatives):
         keep_model = model_key in models_above_baseline[task]
         ax.bar(
             idx,
-            num_pred_negatives[model_key] / n_samples[model_key],
+            num_neg / n_samples[model_key],
             # width=bar_width,
             zorder=1,
             color="black" if keep_model else "grey",
@@ -310,12 +319,13 @@ def plot_agreement_matrix(
     # return fig, ax
 
 
-def plot_model_agreement_barplot(
+def plot_recourse_barplot(
     ax: plt.Axes,
     predictions: torch.Tensor,
     baseline_rates: torch.Tensor = None,
     y_true: torch.Tensor = None,
     restrict_only_pos_instances: bool = True,
+    restrict_only_neg_instances: bool = False,
     plot_cumulative: bool = False,
     xlabel: str = "fraction of models rejecting",
     ylabel: str = "fraction of positive instances",
@@ -324,6 +334,7 @@ def plot_model_agreement_barplot(
     relative_x: bool = True,
     count_accepted=True,
     indicate_mean=False,
+    show_monoc=True,
 ):
     """
     Plots the agreement between model predictions and observed data, optionally
@@ -369,28 +380,56 @@ def plot_model_agreement_barplot(
     logging.warning(
         f"Counting {'acceptances, make sure to use accuracy as baseline rate.' if count_accepted else 'rejections, make sure to use error rate as baseline rate.'}"
     )
-    fun = get_observed_acceptance_df if count_accepted else get_observed_rejections_df
+    fun = (
+        get_obs_acceptance_aggregated
+        if count_accepted
+        else get_obs_rejections_aggregated
+    )
     num_models_agreeing, frequencies = fun(
         predictions=predictions,
         restrict_only_pos_instances=restrict_only_pos_instances,
+        restrict_only_neg_instances=restrict_only_neg_instances,
         true_labels=y_true,
         padding=True,
     )
     N = frequencies.sum()
 
     # plot observed
-    ax.bar(xs, frequencies / N, width=width, color="C0", label="observed")
+    ax.bar(
+        xs - (width / 2 if baseline_rates else 0),
+        frequencies / N,
+        width=width,
+        color="C0",
+        label="observed",
+    )
+
+    if show_monoc:
+        # plot monoculture
+        mean_rate = (
+            1.0 - np.mean(baseline_rates) if count_accepted else np.mean(baseline_rates)
+        )
+        ax.step(
+            x=xs,
+            y=[mean_rate] * (len(xs) - 1) + [1.0],
+            where="post",
+            color="red",
+            label="monoculture",
+            linestyle="dotted",
+            zorder=-1,
+        )
 
     if baseline_rates:
         # compute expected agreement
         prob_expected = torch.tensor(
             [
-                sp.stats.poisson_binom.pmf(k=num_agreeing, p=baseline_rates)
+                poisson_binom_agreement(baseline_rate=baseline_rates, k=num_agreeing)
                 for num_agreeing in range(M + 1)
             ]
         )
         # plot baseline
-        ax.bar(xs + width, prob_expected, width=width, color="C1", label=baseline_label)
+        ax.bar(
+            xs + width / 2, prob_expected, width=width, color="C1", label=baseline_label
+        )
 
     if plot_cumulative:
 
@@ -404,9 +443,15 @@ def plot_model_agreement_barplot(
                 # from left to right (total at xmax)
                 return torch.cumsum(t, dim=0)
 
-        ax.plot(xs, cumulative_sum(frequencies / N), color="C0")
+        ax.step(xs, cumulative_sum(frequencies / N), color="C0", where="post")
         if baseline_rates:
             ax.plot(xs, cumulative_sum(prob_expected), color="C1")
+
+        print(
+            xs.shape,
+            cumulative_sum(prob_expected).shape,
+            cumulative_sum(frequencies / N).shape,
+        )
 
     if indicate_mean:
         mean_obs = (num_models_agreeing * frequencies).sum() / (frequencies.sum() * M)
@@ -439,6 +484,431 @@ def plot_model_agreement_barplot(
     return ax
 
 
+def recourse_barplot_categories(predictions):
+    raise NotImplementedError(
+        "Check 'same-prompt_individual.ipynb' for implementation."
+    )
+
+
+def no_leading_zero(x, pos):
+    if abs(x) < 1:
+        return f"{x:.2f}".lstrip("0").replace("-0", "-")
+    else:
+        return f"{x:.2f}"
+
+
+def plot_recourse_lineplot(
+    ax: plt.Axes,
+    predictions: torch.Tensor,
+    baseline_rates: torch.Tensor = None,
+    y_true: torch.Tensor = None,
+    restrict_only_pos_instances: bool = True,
+    restrict_only_neg_instances: bool = False,
+    xlabel: str = "fraction of positive instances",
+    ylabel: str = "fraction of models accepting",
+    title: str = "",
+    baseline_label: str = "random error",
+    relative_x: bool = True,
+    count_accepted=True,
+    at_least=True,
+    show_monoc=True,
+    plot_pdf=True,
+    alpha=1.0,
+    num_ticks=5,
+):
+    """
+    x individuals are accepted by **at least** y models
+
+    Parameters:
+        ax: The matplotlib axis to plot on.
+        predictions: A tensor of predictions from the model.
+        y_true: True labels (optional).
+        baseline_rates: Baseline rejection rates for comparison (optional).
+        plot_cumulative: Whether to plot cumulative probabilities (default = False, else True
+          to plot from left to right, else 'left' to add up all the way to the left)
+        restrict_only_pos_instances: Restrict calculation to positive instances.
+        ylabel: Label for the y-axis.
+        baseline_label: Label for the baseline comparison.
+        relative_x: Normalize x-axis to [0, 1].
+        count_accepted: Count positive predictions (True) or rejections (False), default: True,
+        indicate_mean: Whether to plot a small triangle below the x-axis to indicate the mean value, default=False.
+
+    Returns:
+        ax: The matplotlib axis with the plot.
+    """
+    # Validate inputs
+    _, M = predictions.shape
+    if M == 0:
+        print(ValueError("Predictions tensor is empty."))
+        return ax
+
+    # Configure the plot
+    ax.set_title(title)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+
+    # Compute observed agreement
+    logging.warning(
+        f"Counting {'acceptances, make sure to use accuracy as baseline rate.' if count_accepted else 'rejections, make sure to use error rate as baseline rate.'}"
+    )
+    num_model_agreeing = get_obs_agreement_counts(
+        predictions=predictions,
+        restrict_only_pos_instances=restrict_only_pos_instances,
+        restrict_only_neg_instances=restrict_only_neg_instances,
+        true_labels=y_true,
+    )
+    if not count_accepted:
+        num_model_agreeing = M - num_model_agreeing
+
+    N = len(num_model_agreeing)
+
+    fraction_individuals = torch.arange(N, dtype=torch.float32)
+    if relative_x:
+        fraction_individuals /= N
+        ax.set_xlim(-0.01, 1.0)
+
+    # plot observed
+    fraction_models_observed = sorted(num_model_agreeing / M, reverse=at_least)
+    ax.plot(
+        fraction_individuals,
+        fraction_models_observed,
+        color="C0",
+        label="observed",
+        zorder=0,
+        alpha=alpha,
+    )
+
+    if show_monoc:
+        # plot monoculture
+        mean_rate = abs(float(not at_least) - np.mean(baseline_rates))
+        # if count_accepted
+        # else np.mean(baseline_rates)
+
+        ax.step(
+            x=[0.0, mean_rate, 1.0],
+            y=[1.0, 0.0, 0.0] if at_least else [0.0, 1.0, 1.0],
+            where="post",
+            color="red",
+            label="monoculture",
+            linestyle="dotted",
+            zorder=-1,
+            alpha=alpha,
+        )
+
+    if baseline_rates:
+        # compute expected agreement
+        prob_expected = torch.tensor(
+            [
+                poisson_binom_agreement(baseline_rate=baseline_rates, k=num_agreeing)
+                for num_agreeing in range(M + 1)
+            ]
+        )
+
+        # plot baseline
+        fraction_individuals_at_rand = (
+            1.0 - cumulative_sum(prob_expected)
+            if at_least
+            else cumulative_sum(prob_expected)
+        )
+        fraction_models = np.arange(M + 1) / M
+        ax.plot(
+            fraction_individuals_at_rand,
+            fraction_models,
+            color="C1",
+            label=baseline_label,
+            zorder=-1,
+            alpha=alpha,
+        )
+
+    ax.set_xticks(np.linspace(0, 1.0, num=num_ticks))
+
+    if plot_pdf:
+        # plot baseline
+        width = 0.4 / M if relative_x else 0.5
+
+        if baseline_rates:
+            ax.barh(
+                np.arange(M + 1) / M + width / 2,
+                prob_expected,
+                height=width,
+                color="C1",
+                label=baseline_label,
+                alpha=0.7,
+            )
+
+        fun = (
+            get_obs_acceptance_aggregated
+            if count_accepted
+            else get_obs_rejections_aggregated
+        )
+        _, frequencies = fun(
+            predictions=predictions,
+            restrict_only_pos_instances=restrict_only_pos_instances,
+            restrict_only_neg_instances=restrict_only_neg_instances,
+            true_labels=y_true,
+            padding=True,
+        )
+        ax.barh(
+            np.arange(M + 1) / M - (width / 2 if baseline_rates else 0),
+            frequencies / N,
+            height=width,
+            color="C0",
+            label="observed",
+            alpha=0.7,
+            zorder=0,
+        )
+
+    obs = np.column_stack((fraction_individuals, fraction_models_observed))
+    at_rnd = (
+        np.column_stack((fraction_individuals_at_rand, fraction_models))
+        if baseline_rates
+        else None
+    )
+    return (
+        ax,
+        obs[np.argsort(obs[:, 0])],
+        at_rnd[np.argsort(at_rnd[:, 0])],
+    )
+
+
+def plot_recourse_lineplot_mean_stderr(
+    ax: plt.Axes,
+    predictions: list[torch.Tensor],
+    baseline_rates: list[torch.Tensor] = None,
+    y_true: torch.Tensor = None,
+    restrict_only_pos_instances: bool = True,
+    restrict_only_neg_instances: bool = False,
+    xlabel: str = "fraction of positive instances",
+    ylabel: str = "fraction of models accepting",
+    title: str = "",
+    baseline_label: str = "random error",
+    relative_x: bool = True,
+    count_accepted=True,
+    at_least=True,
+    show_monoc=True,
+    plot_pdf=True,
+    alpha=1.0,
+    plot_all_samples=True,
+    num_ticks=5,
+):
+    """
+    x individuals are accepted by **at least** y models
+
+    Parameters:
+        ax: The matplotlib axis to plot on.
+        predictions: A tensor of predictions from the model.
+        y_true: True labels (optional).
+        baseline_rates: Baseline rejection rates for comparison (optional).
+        plot_cumulative: Whether to plot cumulative probabilities (default = False, else True
+          to plot from left to right, else 'left' to add up all the way to the left)
+        restrict_only_pos_instances: Restrict calculation to positive instances.
+        ylabel: Label for the y-axis.
+        baseline_label: Label for the baseline comparison.
+        relative_x: Normalize x-axis to [0, 1].
+        count_accepted: Count positive predictions (True) or rejections (False), default: True,
+        indicate_mean: Whether to plot a small triangle below the x-axis to indicate the mean value, default=False.
+
+    Returns:
+        ax: The matplotlib axis with the plot.
+    """
+    assert isinstance(predictions, list) and all(
+        p.shape == predictions[0].shape for p in predictions
+    )
+    # Validate inputs
+    _, M = predictions[0].shape
+    if M == 0:
+        print(ValueError("Predictions tensor is empty."))
+        return ax
+
+    # Configure the plot
+    ax.set_title(title)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+
+    # Compute observed agreement
+    logging.warning(
+        f"Counting {'acceptances, make sure to use accuracy as baseline rate.' if count_accepted else 'rejections, make sure to use error rate as baseline rate.'}"
+    )
+
+    fraction_models_agreeing_observed = []
+    for preds in predictions:
+        num_model_agreeing = get_obs_agreement_counts(
+            predictions=preds,
+            restrict_only_pos_instances=restrict_only_pos_instances,
+            restrict_only_neg_instances=restrict_only_neg_instances,
+            true_labels=y_true,
+        )
+        if not count_accepted:
+            num_model_agreeing = M - num_model_agreeing
+
+        # sort observed agreement
+        fraction_models_agreeing_observed.append(
+            sorted(num_model_agreeing / M, reverse=at_least)
+        )
+
+    N = len(fraction_models_agreeing_observed[0])
+    fraction_individuals = torch.arange(N, dtype=torch.float32)
+    if relative_x:
+        fraction_individuals /= N
+        ax.set_xlim(-0.01, 1.02)
+
+    # plot observed
+    mean_fraction_models_observed = np.array(fraction_models_agreeing_observed).mean(
+        axis=0
+    )
+    stderr_fraction_models_observed = np.array(fraction_models_agreeing_observed).std(
+        axis=0
+    ) / np.sqrt(len(predictions))
+    ax.plot(
+        fraction_individuals,
+        mean_fraction_models_observed,
+        color="C0",
+        label="observed",
+        zorder=0,
+        alpha=alpha,
+    )
+    ax.fill_between(
+        fraction_individuals,
+        mean_fraction_models_observed - stderr_fraction_models_observed,
+        mean_fraction_models_observed + stderr_fraction_models_observed,
+        color="C0",
+        alpha=0.7 * alpha,
+    )
+    if plot_all_samples:
+        lines = ax.get_lines()[0]
+        for sample_frac in fraction_models_agreeing_observed:
+            ax.plot(
+                fraction_individuals,
+                sample_frac,
+                color="C0",
+                label="observed",
+                zorder=0,
+                alpha=0.2,
+                linewidth=0.5 * lines.get_linewidth(),
+            )
+
+    if show_monoc:
+        # plot monoculture
+
+        mean_rates = []
+        for rates in baseline_rates:
+            mean_rates.append(abs(float(not at_least) - np.mean(rates)))
+        # if count_accepted
+        # else np.mean(baseline_rates)
+
+        ax.step(
+            x=[0.0, np.array(mean_rates).mean(axis=0), 1.0],
+            y=[1.0, 0.0, 0.0] if at_least else [0.0, 1.0, 1.0],
+            where="post",
+            color="red",
+            label="monoculture",
+            linestyle="dotted",
+            zorder=-1,
+            alpha=alpha,
+        )
+
+    if baseline_rates:
+        # compute expected agreement
+        fraction_individuals_at_rand = []
+        for rates in baseline_rates:
+            prob_expected = torch.tensor(
+                [
+                    poisson_binom_agreement(baseline_rate=rates, k=num_agreeing)
+                    for num_agreeing in range(M + 1)
+                ]
+            )
+
+            # plot baseline
+            fraction_individuals_at_rand.append(
+                1.0 - cumulative_sum(prob_expected)
+                if at_least
+                else cumulative_sum(prob_expected)
+            )
+
+        fraction_models = np.arange(M + 1) / M
+        mean_fraction_individuals_at_rand = np.array(fraction_individuals_at_rand).mean(
+            axis=0
+        )
+        stderr_fraction_models_observed = np.array(fraction_individuals_at_rand).std(
+            axis=0
+        ) / np.sqrt(len(baseline_rates))
+        ax.plot(
+            mean_fraction_individuals_at_rand,
+            fraction_models,
+            color="C1",
+            label=baseline_label,
+            zorder=-1,
+            alpha=alpha,
+        )
+
+        if plot_all_samples:
+            for sample_frac in fraction_individuals_at_rand:
+                ax.plot(
+                    sample_frac,
+                    fraction_models,
+                    color="C1",
+                    label=baseline_label,
+                    zorder=-1,
+                    alpha=0.2,
+                    linewidth=0.5 * lines.get_linewidth(),
+                )
+
+    ax.set_xticks(np.linspace(0, 1.0, num=num_ticks))
+
+    if plot_pdf:
+        # plot baseline
+        width = 0.4 / M if relative_x else 0.5
+
+        if baseline_rates:
+            ax.barh(
+                np.arange(M + 1) / M + width / 2,
+                prob_expected,
+                height=width,
+                color="C1",
+                label=baseline_label,
+                alpha=0.7,
+            )
+
+        freqs = []
+        for pred in predictions:
+            fun = (
+                get_obs_acceptance_aggregated
+                if count_accepted
+                else get_obs_rejections_aggregated
+            )
+            _, frequencies = fun(
+                predictions=pred,
+                restrict_only_pos_instances=restrict_only_pos_instances,
+                restrict_only_neg_instances=restrict_only_neg_instances,
+                true_labels=y_true,
+                padding=True,
+            )
+            freqs.append(frequencies)
+
+        mean_frequencies = np.array(freqs).mean(axis=0)
+        ax.barh(
+            np.arange(M + 1) / M - (width / 2 if baseline_rates else 0),
+            mean_frequencies / N,
+            height=width,
+            color="C0",
+            label="observed",
+            alpha=0.7,
+            zorder=0,
+        )
+
+    obs = np.column_stack((fraction_individuals, mean_fraction_models_observed))
+    at_rnd = (
+        np.column_stack((mean_fraction_individuals_at_rand, fraction_models))
+        if baseline_rates
+        else None
+    )
+    return (
+        ax,
+        obs[np.argsort(obs[:, 0])],
+        at_rnd[np.argsort(at_rnd[:, 0])],
+    )
+
+
 def plot_model_agreement_multiple_tasks(
     tasks: list,
     predictions: dict,
@@ -467,7 +937,7 @@ def plot_model_agreement_multiple_tasks(
         _, M = predictions[task].shape
         y_true = data[task][1]
 
-        axs[i] = plot_model_agreement_barplot(
+        axs[i] = plot_recourse_barplot(
             axs[i],
             predictions=predictions[task],
             y_true=y_true,
@@ -503,7 +973,9 @@ def plot_agreement_lineplot(
     sort_by=None,
     title="",
     plot_scatter=False,
-    ylim=(0.0, 1.0),
+    ylim=(0.45, 1.0),
+    ylabel="",
+    xlabel="",
 ):
     if isinstance(agreements_observed, torch.Tensor):
         agreements_observed = agreements_observed.numpy()
@@ -524,14 +996,13 @@ def plot_agreement_lineplot(
         agreements_observed = sorted(agreements_observed)
         agreements_exp = sorted(agreements_exp)
 
-    fraction_model_pairs = np.arange(len(agreements_observed)) / len(
-        agreements_observed
-    )
+    M_pairs = len(agreements_observed)
+    fraction_model_pairs = np.arange(0, M_pairs - 1 + 0.01, 1.0) / (M_pairs - 1)
     ax.plot(
         fraction_model_pairs,
         np.ones_like(agreements_observed),
         label="monoculture",
-        color="red",
+        color="C3",
     )
     scatter_args = {"marker": "o", "markersize": 3} if plot_scatter else {}
     ax.plot(fraction_model_pairs, agreements_observed, label="observed", **scatter_args)
@@ -540,8 +1011,8 @@ def plot_agreement_lineplot(
     ax.plot(
         fraction_model_pairs,
         np.zeros_like(agreements_observed) + 0.5,
-        label="coin flip",  # "chance level",
-        color="grey",
+        label="random prediction",  # "chance level",
+        color="C7",
         linestyle="dashed",
         linewidth=1,
         zorder=-1,
@@ -550,9 +1021,12 @@ def plot_agreement_lineplot(
         fraction_model_pairs,
         agreements_observed,
         np.ones_like(agreements_observed),
-        color="lightgrey",
-        alpha=0.4,
+        color="C7",
+        alpha=0.1,
     )
     ax.set_ylim(bottom=ylim[0], top=ylim[1] + 0.01)
+    ax.set_xlim(0, 1)
     ax.set_title(title.replace("ACS", "ACS ").replace("_", " "))
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
     return ax

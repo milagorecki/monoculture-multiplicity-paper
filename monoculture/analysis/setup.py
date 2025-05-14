@@ -15,7 +15,7 @@ ACS_TASKS = (  # all ACS prediction tasks
 )
 
 TABLESHIFT_TASKS = (
-    "BRFSS_Diabetes",
+    # "BRFSS_Diabetes",
     "BRFSS_Blood_Pressure",
 )  # all tableshift tasks
 
@@ -82,9 +82,9 @@ LLM_MODELS = [
     "allenai/OLMo-1B-0724-hf",
     "allenai/OLMo-1B-hf",
     "allenai/OLMo-7B-0724-hf",
-    "allenai--OLMo-7B-hf",
+    "allenai/OLMo-7B-hf",
     #
-    "allenai--OLMo-7B-Instruct-hf",
+    "allenai/OLMo-7B-Instruct-hf",
     "allenai/OLMo-2-1124-7B",
     "allenai/OLMo-2-1124-7B-Instruct",
     # Tabula
@@ -148,8 +148,8 @@ map_feature_order_to_short = dict(
 )
 map_short_to_feature_order = {v: k for k, v in map_feature_order_to_short.items()}
 variations = {
+    "feature_order": list(map(lambda o: map_feature_order_to_short[o], feature_order)),
     "format": formats,
     "connector": connectors,
     "granularity": granularities,
-    "feature_order": list(map(lambda o: map_feature_order_to_short[o], feature_order)),
 }
