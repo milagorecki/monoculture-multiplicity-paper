@@ -9,13 +9,13 @@ from sklearn.dummy import DummyClassifier
 ACS_TASKS = (  # all ACS prediction tasks
     "ACSIncome",
     "ACSEmployment",
-    # "ACSMobility",
+    "ACSMobility",
     "ACSTravelTime",
     "ACSPublicCoverage",
 )
 
 TABLESHIFT_TASKS = (
-    # "BRFSS_Diabetes",
+    "BRFSS_Diabetes",
     "BRFSS_Blood_Pressure",
 )  # all tableshift tasks
 
@@ -87,8 +87,9 @@ LLM_MODELS = [
     "allenai/OLMo-7B-Instruct-hf",
     "allenai/OLMo-2-1124-7B",
     "allenai/OLMo-2-1124-7B-Instruct",
-    # Tabula
-    # "mlfoundations/tabula-8b",
+    # GPT models
+    "gpt-4.1",
+    "gpt-3.5-turbo-0125",
 ]
 
 model_families_coarse = sorted(
