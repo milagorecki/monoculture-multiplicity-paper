@@ -48,10 +48,11 @@ def get_observed_pairwise_agreement_rate(
         predictions_m1.shape == predictions_m2.shape
     ), "Dataframes have different shapes"
     # assert predictions_m1.shape[1] <= 1, "Only one column expected"
-    num_samples = predictions_m1.shape[0]
-    observed_agreement = (predictions_m1.values == predictions_m2.values).sum(
-        axis=0
-    ) / num_samples
+    valid_mask = predictions_m1.notna() & predictions_m2.notna()
+    num_samples = predictions_m1[valid_mask].shape[0]
+    observed_agreement = (
+        predictions_m1[valid_mask].values == predictions_m2[valid_mask].values
+    ).sum(axis=0) / num_samples
     return observed_agreement  # float(observed_agreement[0])
 
 
@@ -132,10 +133,9 @@ def diff_agreement_wrapper(m1, m2, predictions, evals, metric="accuracy"):
 def get_fraction_no_recourse(predictions_array: Union[np.array, torch.Tensor]):
     if isinstance(predictions_array, torch.Tensor):
         predictions_array = predictions_array.to_numpy()
-    return (
-        np.sum(np.bitwise_or.reduce(predictions_array, axis=1) == 0)
-        / predictions_array.shape[0]
-    )
+    predictions_array = predictions_array.astype(np.int8)
+    row_wise_or = np.bitwise_or.reduce(predictions_array, axis=1)
+    return np.sum(row_wise_or == 0) / predictions_array.shape[0]
 
 
 def get_observed_k_rejections(
@@ -182,18 +182,17 @@ def get_obs_acceptance_aggregated(
     true_labels: pd.Series = None,
     padding=True,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    if isinstance(predictions, pd.DataFrame):
-        predictions = predictions.to_numpy()
+    # if isinstance(predictions, pd.DataFrame):
+    #     predictions = predictions.to_numpy()
     N, M = predictions.shape
 
     assert not (restrict_only_pos_instances and restrict_only_neg_instances)
-    if restrict_only_pos_instances:
-        assert true_labels is not None, "Provide labels to restrict data."
-        predictions = predictions[true_labels == 1]
-    elif restrict_only_neg_instances:
-        assert true_labels is not None, "Provide labels to restrict data."
-        predictions = predictions[true_labels == 0]
-    counts_accepting = predictions.sum(axis=1)
+    counts_accepting = get_obs_agreement_counts(
+        predictions=predictions,
+        restrict_only_neg_instances=restrict_only_neg_instances,
+        restrict_only_pos_instances=restrict_only_pos_instances,
+        true_labels=true_labels,
+    )
     # aggregate
     num_models_accepting, counts = torch.Tensor(counts_accepting).unique(
         return_counts=True
@@ -206,6 +205,39 @@ def get_obs_acceptance_aggregated(
         return torch.arange(M + 1), counts_padded
 
     return num_models_accepting, counts
+
+
+def get_fraction_obs_acceptance_aggregated(
+    predictions: Union[pd.DataFrame, torch.Tensor, np.array],
+    restrict_only_pos_instances=False,
+    restrict_only_neg_instances=False,
+    true_labels: pd.Series = None,
+    padding=True,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    # if isinstance(predictions, pd.DataFrame):
+    #     predictions = predictions.to_numpy()
+    N, M = predictions.shape
+
+    assert not (restrict_only_pos_instances and restrict_only_neg_instances)
+    counts_accepting = get_obs_agreement_counts(
+        predictions=predictions,
+        restrict_only_neg_instances=restrict_only_neg_instances,
+        restrict_only_pos_instances=restrict_only_pos_instances,
+        true_labels=true_labels,
+    )
+    # aggregate
+    M_not_na = predictions.notna().sum(axis=1).to_numpy()
+    frac_models_accepting, counts = np.unique(
+        counts_accepting / M_not_na, return_counts=True
+    )
+
+    if padding:
+        counts_padded = torch.zeros(M + 1)
+        for i in range(len(frac_models_accepting)):
+            counts_padded[int(frac_models_accepting[i])] = counts[i]
+        return torch.arange(M + 1), counts_padded
+
+    return frac_models_accepting, counts
 
 
 def get_obs_rejections_aggregated(
@@ -240,7 +272,64 @@ def get_agreement_matrix(models, dictionary: dict, fun: callable):
     return matrix
 
 
-def get_ambiguity(predictions: pd.DataFrame):
+def get_ambiguity(h0_predictions: pd.Series, predictions: pd.DataFrame):
+    N, M = predictions.shape
+    # check if same predictions as baseline
+    assert all(
+        h0_predictions.index == predictions.index
+    ), "Index must match to compare correctly"
+    # check where different from ref
+    diff = predictions.ne(h0_predictions, axis=0)
+    # check where not NaN
+    valid_mask = predictions.notna()
+    # only compare entries that are different and valid
+    any_change = (diff & valid_mask).any(axis=1)
+    return any_change.sum() / N
+
+    # if predictions.isna().any().any():
+    #     print("NaNs contained")
+    #     nan_mask_col = predictions.isna().any()
+    #     # compute changes without NaN columns
+    #     num_models_agreeing_h0 =  predictions.loc[:, ~nan_mask_col].eq(h0_predictions, axis=0).sum(axis=1)
+
+    # else:
+    #     num_models_agreeing_h0 = predictions.eq(h0_predictions, axis=0).sum(axis=1)
+    #     return (
+    #         num_models_agreeing_h0[
+    #             (num_models_agreeing_h0 != 0) & (num_models_agreeing_h0 != M)
+    #         ].count()
+    #         / N
+    #     )
+
+
+def get_discrepancy(h0_predictions: pd.Series, predictions: pd.DataFrame):
+    N, M = predictions.shape
+    # check if same predictions as baseline
+    assert all(
+        h0_predictions.index == predictions.index
+    ), "Index must match to compare correctly"
+    if predictions.isna().any().any():
+        print("NaNs contained")
+        nan_mask_col = predictions.isna().any()
+        num_disagreements_with_h0 = (
+            predictions.loc[:, ~nan_mask_col].ne(h0_predictions, axis=0).sum(axis=0)
+        )
+        max_disagree = num_disagreements_with_h0.max() / N
+        # for columns with NaNs check only among those that are not NaN
+        no_nan_rows = predictions.notna().all(axis=1)
+        num_disagree_filtered_nan = (
+            predictions.loc[no_nan_rows, nan_mask_col]
+            .ne(h0_predictions[no_nan_rows], axis=0)
+            .sum(axis=0)
+        ) / h0_predictions[no_nan_rows].shape[0]
+        print("reduces to", h0_predictions.shape)
+        return max(num_disagree_filtered_nan.max(), max_disagree)
+    else:
+        num_disagreements_with_h0 = predictions.ne(h0_predictions, axis=0).sum(axis=0)
+        return num_disagreements_with_h0.max() / N
+
+
+def get_ambiguity_all_models(predictions: pd.DataFrame):
     # assume every column contains the predictions of one model
     N, M = predictions.shape
     num_accept = predictions.sum(axis=1)
@@ -248,7 +337,7 @@ def get_ambiguity(predictions: pd.DataFrame):
     return num_accept[(num_accept > 0) & (num_accept < M)].shape[0] / N
 
 
-def get_discrepancy(predictions: pd.DataFrame):
+def get_discrepancy_all_models(predictions: pd.DataFrame):
     # assume every column contains the predictions of one model
     # find max number of different predictions between any two columns (Hamming dist)
     N, M = predictions.shape
