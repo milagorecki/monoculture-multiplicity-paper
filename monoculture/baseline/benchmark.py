@@ -14,7 +14,7 @@ from folktexts.benchmark import (
     DEFAULT_ROOT_RESULTS_DIR,
 )
 from folktexts._io import load_json, save_json
-from folktexts._utils import hash_dict, is_valid_number, get_current_timestamp
+from folktexts._utils import hash_dict, get_current_timestamp
 from folktexts.dataset import Dataset
 from folktexts.acs import ACSDataset, ACSTaskMetadata
 from folktexts.ts import TableshiftBRFSSDataset, TableshiftBRFSSTaskMetadata
@@ -114,12 +114,10 @@ class BenchmarkBaseline:
 
     TABLESHIFT_DATASET_CONFIGS = {
         # survey configs should be defined in task
-
         # Data split configs
         "test_size": 0.1,
         "val_size": 0.1,
         "subsampling": None,
-
         # Fixed random seed
         "seed": 42,
     }
@@ -269,9 +267,10 @@ class BenchmarkBaseline:
         if self.task.sensitive_attribute is not None:
             s_test = self.dataset.get_sensitive_attribute_data().loc[y_test.index]
 
+        fillna = self.model_name in ["LogisticRegression", "NN"]
         # Train predictor ##TODO: move somewhere else and only load fitted classifier
         X_train, y_train = self.dataset.get_data_split("train")
-        self.base_clf.fit(X_train, y_train)
+        self.base_clf.fit(X_train, y_train, fillna=fillna)
 
         # Get risk-estimate predictions
         test_predictions_save_path = self._get_predictions_save_path("test")
@@ -279,6 +278,7 @@ class BenchmarkBaseline:
             data=X_test,
             predictions_save_path=test_predictions_save_path,
             labels=y_test,  # used only to save alongside predictions in disk
+            fillna=fillna,
         )
         self._y_test_scores = self.base_clf._get_positive_class_scores(
             self._y_test_scores
@@ -464,8 +464,6 @@ class BenchmarkBaseline:
             **kwargs,
         )
 
-
-
     @classmethod
     def make_tableshift_benchmark(
         cls,
@@ -578,7 +576,7 @@ class BenchmarkBaseline:
         # Update config with any additional kwargs
         config = config.update(
             **kwargs
-        )  ## TODO: Check if running, because kwargs now also includes prompting specififications
+        )  # TODO: Check if running, because kwargs now also includes prompting specififications
 
         # Handle TaskMetadata object
         task = TaskMetadata.get_task(task) if isinstance(task, str) else task
@@ -602,7 +600,7 @@ class BenchmarkBaseline:
         baseline_inference_kwargs = {}
 
         # Create Classifier object
-
+        logging.info("Create BaselineClassifier")
         base_clf = BaselineClassifier(
             model_name=model,
             clf_params=clf_params,

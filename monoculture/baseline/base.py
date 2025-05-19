@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import logging
-import math
-from abc import ABC, abstractmethod
+from abc import ABC  # , abstractmethod
 
 import numpy as np
 import pandas as pd
@@ -18,7 +17,7 @@ from xgboost import XGBClassifier, XGBModel
 from sklearn.dummy import DummyClassifier
 
 from folktexts.task import TaskMetadata
-from folktexts._utils import hash_dict, hash_function
+from folktexts._utils import hash_dict  # , hash_function
 
 
 SCORE_COL_NAME = "risk_score"
@@ -35,7 +34,9 @@ BASELINES = {
 
 # baselines = {
 #     "Constant": DummyClassifier(strategy="prior"),
-#     "LR": LogisticRegression(),  # (penalty='l2', *, dual=False, tol=0.0001, C=1.0, fit_intercept=True, intercept_scaling=1, class_weight=None, random_state=None, solver='lbfgs', max_iter=100, multi_class='deprecated', verbose=0, warm_start=False, n_jobs=None, l1_ratio=None)
+#     "LR": LogisticRegression(),  # (penalty='l2', *, dual=False, tol=0.0001, C=1.0, fit_intercept=True, intercept_scaling=1,
+#                                     class_weight=None, random_state=None, solver='lbfgs', max_iter=100,
+#                                     multi_class='deprecated', verbose=0, warm_start=False, n_jobs=None, l1_ratio=None)
 #     "GBM": HistGradientBoostingClassifier(),  #
 #     "XGBoost": XGBClassifier(),  #
 # }
@@ -157,12 +158,6 @@ class BaselineClassifier(ClassifierMixin, BaseEstimator, ABC):
         """Converts positive class scores to multiclass scores."""
         return np.column_stack([1 - pos_class_scores, pos_class_scores])
 
-    def predict():
-        raise NotImplementedError
-
-    def predict_proba():
-        raise NotImplementedError
-
     def fit(
         self,
         X_train: pd.DataFrame | torch.Tensor,
@@ -172,9 +167,15 @@ class BaselineClassifier(ClassifierMixin, BaseEstimator, ABC):
         assert len(X_train) == len(y_train)
         train_nan_count = X_train.isna().any(axis=1).sum()
         if fillna and train_nan_count > 0:
-            print(f"Found {train_nan_count} NaN values, fill with -1.")
+            logging.info(f"Found {train_nan_count} NaN values, fill with -1.")
             # Fill NaNs with value=-1
             X_train = X_train.fillna(axis="columns", value=-1)
+
+        if self._task.name.startswith("BRFSS"):
+            print("Filling NOT_ASKED_MISSING values with -2.")
+            for col in X_train.select_dtypes(exclude=[np.number]).columns:
+                X_train.replace(to_replace="NOTASKED_MISSING", value=-2.0, inplace=True)
+                X_train[col] = pd.to_numeric(X_train[col])
 
         # Fit on train data
         self._clf.fit(X_train, y_train)
@@ -208,9 +209,14 @@ class BaselineClassifier(ClassifierMixin, BaseEstimator, ABC):
         fillna: bool = False,
     ):
         if fillna:
-            print(f"Filling NaN values with -1.")
+            print("X_train: Filling NaN values with -1.")
             # Fill NaNs with value=-1
             data = data.fillna(axis="columns", value=-1)
+        if self._task.name.startswith("BRFSS"):
+            print("X_train: Filling NOT_ASKED_MISSING values with -2.")
+            for col in data.select_dtypes(exclude=[np.number]).columns:
+                data.replace(to_replace="NOTASKED_MISSING", value=-2.0, inplace=True)
+                data[col] = pd.to_numeric(data[col])
 
         risk_scores = self.predict_proba(
             data,
@@ -255,9 +261,14 @@ class BaselineClassifier(ClassifierMixin, BaseEstimator, ABC):
 
         # Compute risk scores
         if fillna:
-            print(f"Filling NaN values with -1.")
+            logging.info("X_test: Filling NaN values with -1.")
             # Fill NaNs with value=-1
             data = data.fillna(axis="columns", value=-1)
+        if self._task.name.startswith("BRFSS"):
+            print("X_test: Filling NOT_ASKED_MISSING values with -2.")
+            for col in data.select_dtypes(exclude=[np.number]).columns:
+                data.replace(to_replace="NOTASKED_MISSING", value=-2.0, inplace=True)
+                data[col] = pd.to_numeric(data[col])
 
         risk_scores = self._clf.predict_proba(data)
 
@@ -279,7 +290,7 @@ class BaselineClassifier(ClassifierMixin, BaseEstimator, ABC):
         updated_results = results.copy()
         updated_results["config_task_name"] = self._task
         updated_results["config_model_name"] = self._model_name
-        updated_results["config_params"] = self.clf_params  ## TODO: Check how to save
+        updated_results["config_params"] = self.clf_params  # TODO: Check how to save
         updated_results["name"] = self._model_name
         using_all_features = self._clf.n_features_in_ == len(self._task.features)
         updated_results["num_features"] = (

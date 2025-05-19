@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""Launch htcondor jobs for all ACS benchmark experiments.
-"""
+"""Launch htcondor jobs for all ACS benchmark experiments."""
 import argparse
 import math
 from pathlib import Path
@@ -25,16 +24,18 @@ from monoculture.baseline import BASELINES
 ROOT_DIR = Path("/fast/groups/sf")
 # ROOT_DIR = Path("~").expanduser().resolve()               # on local machine
 
-# ACS data directory
+# data directory
 ACS_DATA_DIR = ROOT_DIR / "data"
+TABLESHIFT_DATA_DIR = Path("/fast/mgorecki/monoculture/data")
 
 
 ##################
 # Global configs #
 ##################
 JOB_CPUS = 4
+JOB_GPUS = 1
 JOB_MEMORY_GB = 60
-JOB_BID = 500  # 250
+JOB_BID = 500
 
 
 # Function that defines common settings among all LLM-as-clf experiments
@@ -56,15 +57,19 @@ def make_base_clf_experiment(
 
     # Set default job kwargs
     job_kwargs.setdefault("job_cpus", JOB_CPUS)
-    job_kwargs.setdefault("job_gpus", 1)  # One GPU per 40B parameters
+    job_kwargs.setdefault("job_gpus", JOB_GPUS)
     job_kwargs.setdefault("job_memory_gb", JOB_MEMORY_GB)
     job_kwargs.setdefault("job_gpu_memory_gb", 35)
     job_kwargs.setdefault("job_bid", JOB_BID)
 
-    # Set default experiment kwargs
-    n_shots = int(experiment_kwargs.get("few_shot", 1))
-    experiment_kwargs.setdefault("data_dir", ACS_DATA_DIR.as_posix())
-    # experiment_kwargs.setdefault("fit_threshold", FIT_THRESHOLD)
+    experiment_kwargs.setdefault(
+        "data_dir",
+        (
+            ACS_DATA_DIR.as_posix()
+            if task in ACS_TASKS
+            else TABLESHIFT_DATA_DIR.as_posix()
+        ),
+    )
 
     results_dir = get_or_create_results_dir(
         model_name=model_name,
@@ -77,7 +82,7 @@ def make_base_clf_experiment(
         executable_path=executable_path,
         env_vars=env_vars_str,
         kwargs=dict(
-            model=model_name,  ##TODO
+            model=model_name,
             task=task,
             results_dir=results_dir.as_posix(),
             **experiment_kwargs,

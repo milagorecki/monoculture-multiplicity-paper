@@ -1,15 +1,31 @@
 #!/usr/bin/env python3
 """Runs the calibration benchmark with a baseline model from the command line.
 
-usage: 
-    - general: run_acs_benchmark_baseline.py [-h] --model MODEL --results-dir RESULTS_DIR --data-dir DATA_DIR [--task TASK] [--subsampling SUBSAMPLING] [--seed SEED] [--clf-params [CLF_PARAMS ...]] [--use-feature-subset USE_FEATURE_SUBSET] [--use-population-filter USE_POPULATION_FILTER] [--logger-level {DEBUG,INFO,WARNING,ERROR,CRITICAL}]
-    - example: python baseline/run_acs_benchmark_baseline.py --model GBM  --results-dir '../results/baseline-test/' --data-dir '../../llm_fairness/folktexts/data/' --clf-params learning_rate=0.2 max_depth=5 max_iter=200 
-    
+usage:
+    - general:
+        run_acs_benchmark_baseline.py
+            [-h]
+            --model MODEL
+            --results-dir RESULTS_DIR
+            --data-dir DATA_DIR
+            [--task TASK]
+            [--subsampling SUBSAMPLING]
+            [--seed SEED]
+            [--clf-params [CLF_PARAMS ...]]
+            [--use-feature-subset USE_FEATURE_SUBSET]
+            [--use-population-filter USE_POPULATION_FILTER]
+            [--logger-level {DEBUG,INFO,WARNING,ERROR,CRITICAL}]
+    - example: python baseline/run_acs_benchmark_baseline.py
+                --model GBM
+                --results-dir '../results/baseline-test/'
+                --data-dir '../../llm_fairness/folktexts/data/'
+                --clf-params "learning_rate=0.2 max_depth=5 max_iter=200"
+
 """
 import json
 import logging
 import sys
-from argparse import ArgumentParser, Action
+from argparse import ArgumentParser
 from pathlib import Path
 
 from folktexts._utils import ParseDict
@@ -42,18 +58,6 @@ def is_int(element: any) -> bool:
         return True
     except ValueError:
         return False
-
-
-class ParseDict(Action):
-    def __call__(self, parser, namespace, values, option_string=None):
-        setattr(namespace, self.dest, dict())
-        for value in values:
-            key, value = value.split("=")
-            if is_int(value):
-                value = int(value)
-            elif is_float(value):
-                value = float(value)
-            getattr(namespace, self.dest)[key] = value
 
 
 def setup_arg_parser() -> ArgumentParser:
