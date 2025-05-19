@@ -14,6 +14,7 @@ from .metrics import (
     get_obs_agreement_counts,
     get_obs_acceptance_aggregated,
     get_obs_rejections_aggregated,
+    get_fraction_obs_acceptance_aggregated,
 )
 from pathlib import Path
 import matplotlib.colors as pltcolors
@@ -547,6 +548,11 @@ def plot_recourse_lineplot(
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
 
+    num_nan_models = predictions.isna().any().sum()
+    if num_nan_models > 0:
+        logging.warning(
+            f"Ignoring {num_nan_models} models because they contain NaN values."
+        )
     # Compute observed agreement
     logging.warning(
         f"Counting {'acceptances, make sure to use accuracy as baseline rate.' if count_accepted else 'rejections, make sure to use error rate as baseline rate.'}"
@@ -565,10 +571,14 @@ def plot_recourse_lineplot(
     fraction_individuals = torch.arange(N, dtype=torch.float32)
     if relative_x:
         fraction_individuals /= N
-        ax.set_xlim(-0.01, 1.0)
+        ax.set_xlim(-0.01, 1.01)
 
     # plot observed
-    fraction_models_observed = sorted(num_model_agreeing / M, reverse=at_least)
+    M_not_na = predictions.notna().sum(axis=1).to_numpy()
+    fraction_models_observed = sorted(
+        num_model_agreeing / M_not_na,
+        reverse=at_least,
+    )
     ax.plot(
         fraction_individuals,
         fraction_models_observed,
@@ -604,6 +614,7 @@ def plot_recourse_lineplot(
             ]
         )
 
+        width = 0.4 / M if relative_x else 0.5
         # plot baseline
         fraction_individuals_at_rand = (
             1.0 - cumulative_sum(prob_expected)
@@ -611,8 +622,8 @@ def plot_recourse_lineplot(
             else cumulative_sum(prob_expected)
         )
         fraction_models = np.arange(M + 1) / M
-        ax.plot(
-            fraction_individuals_at_rand,
+        ax.step(
+            fraction_individuals_at_rand + width,
             fraction_models,
             color="C1",
             label=baseline_label,
@@ -624,6 +635,7 @@ def plot_recourse_lineplot(
 
     if plot_pdf:
         # plot baseline
+        print(M)
         width = 0.4 / M if relative_x else 0.5
 
         if baseline_rates:
@@ -637,20 +649,33 @@ def plot_recourse_lineplot(
             )
 
         fun = (
-            get_obs_acceptance_aggregated
+            get_fraction_obs_acceptance_aggregated
+            # get_obs_acceptance_aggregated
             if count_accepted
             else get_obs_rejections_aggregated
         )
-        _, frequencies = fun(
+        frac_models_accepting, frequencies = fun(
             predictions=predictions,
             restrict_only_pos_instances=restrict_only_pos_instances,
             restrict_only_neg_instances=restrict_only_neg_instances,
             true_labels=y_true,
-            padding=True,
+            padding=False,
         )
+        # print(type(frequencies))
+
+        bins = np.linspace(0, 1, M)  # edges: 0.0, 0.2, 0.4, 0.6, 0.8, 1.0
+
+        # Bin the values using pandas
+        binned = pd.cut(frac_models_accepting, bins=bins, include_lowest=True)
+        df = pd.DataFrame({"bin": binned, "vals": frequencies})
+        bin_sums = df.groupby("bin")["vals"].sum()
+        midpoints = bin_sums.index.map(lambda interval: float(interval.right)).astype(
+            float
+        )
+
         ax.barh(
-            np.arange(M + 1) / M - (width / 2 if baseline_rates else 0),
-            frequencies / N,
+            midpoints - (width / 2 if baseline_rates else -width / 2),
+            bin_sums.values / N,
             height=width,
             color="C0",
             label="observed",
@@ -772,7 +797,7 @@ def plot_recourse_lineplot_mean_stderr(
         mean_fraction_models_observed - stderr_fraction_models_observed,
         mean_fraction_models_observed + stderr_fraction_models_observed,
         color="C0",
-        alpha=0.7 * alpha,
+        alpha=0.5 * alpha,
     )
     if plot_all_samples:
         lines = ax.get_lines()[0]
@@ -783,7 +808,7 @@ def plot_recourse_lineplot_mean_stderr(
                 color="C0",
                 label="observed",
                 zorder=0,
-                alpha=0.2,
+                alpha=0.15,
                 linewidth=0.5 * lines.get_linewidth(),
             )
 
@@ -885,7 +910,10 @@ def plot_recourse_lineplot_mean_stderr(
             )
             freqs.append(frequencies)
 
+        print(frequencies)
         mean_frequencies = np.array(freqs).mean(axis=0)
+        print(mean_frequencies)
+        print(N)
         ax.barh(
             np.arange(M + 1) / M - (width / 2 if baseline_rates else 0),
             mean_frequencies / N,
@@ -1023,6 +1051,7 @@ def plot_agreement_lineplot(
         np.ones_like(agreements_observed),
         color="C7",
         alpha=0.1,
+        zorder=-2,
     )
     ax.set_ylim(bottom=ylim[0], top=ylim[1] + 0.01)
     ax.set_xlim(0, 1)
