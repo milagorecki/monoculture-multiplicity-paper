@@ -34,11 +34,11 @@ axes.spines.bottom   : True
 axes.spines.top      : False
 axes.spines.right    : False
 
-axes.linewidth       : 1.5
-xtick.major.width    : 2
-xtick.minor.width    : 2
-ytick.major.width    : 2
-ytick.minor.width    : 2
+axes.linewidth       : 1
+xtick.major.width    : 1
+xtick.minor.width    : 1
+ytick.major.width    : 1
+ytick.minor.width    : 1
 
 lines.linewidth      : 1.5
 lines.markersize     : 4
