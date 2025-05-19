@@ -1,6 +1,7 @@
 import os
 import re
 from .setup import (
+    LLM_MODELS,
     ACS_TASKS,
     TABLESHIFT_TASKS,
     model_families,
@@ -93,6 +94,9 @@ def prettify_model_name(model_hf_name: str) -> str:
         "allenai/OLMo-7B-Instruct-hf": "OLMo 7B (it)",
         "allenai/OLMo-2-1124-7B": "OLMo 2 7B",
         "allenai/OLMo-2-1124-7B-Instruct": "OLMo 2 7B (it)",
+        # GPT
+        "gpt-3.5-turbo-0125": "GPT 3.5",
+        "gpt-4.1": "GPT 4.1",
     }
 
     if model_hf_name in dct:
@@ -116,12 +120,14 @@ def is_instruction_tuned(model_hf_name: str) -> bool:
 
 
 def get_size(model_key):
+    if "gpt" in model_key:
+        return 10**11
     # just a wrapper to facilitate imports
     return get_model_size_B(model_key)
 
 
 def get_size_and_it(model_key, eps=0.001):
-    return get_model_size_B(model_key) + eps * int(is_instruction_tuned(model_key))
+    return get_size(model_key) + eps * int(is_instruction_tuned(model_key))
 
 
 def sort_by_size(models: list):
@@ -204,6 +210,11 @@ def create_result_df(
                     .parent.parent.name.replace("model-", "")
                     .replace(f"_task-{task}", "")
                 )  # extract model_name from model folder
+                if not key_to_model(model_name) in LLM_MODELS:
+                    logging.error(
+                        f"Model name {model_name} not found in LLMs, skipping."
+                    )
+                    continue
                 bench_hash = Path(file_path).parent.name.split("_bench-")[1]
                 parsed_results = parse_results_dict(load_json(file_path))
 
@@ -502,7 +513,7 @@ def binarize_using_threshold(col, evals: dict):
     return col > evals[m]["threshold"]
 
 
-def load_task_data(tasks: str | list, data_dir: Path | str):
+def load_task_data(tasks: str | list, data_dir: Path | str, split: str = "test"):
     if isinstance(tasks, str):
         tasks = [tasks]
     if isinstance(data_dir, str):
@@ -511,7 +522,7 @@ def load_task_data(tasks: str | list, data_dir: Path | str):
     for task in tasks:
         print(task)
         logging.info(f"Loading data for task {task}.")
-        if task in ACS_TASKS:
+        if task in ACS_TASKS or task.startswith("ACS"):
             acs_task = ACSTaskMetadata.get_task(task)
             acs_dataset_configs = (
                 folktexts.benchmark.Benchmark.ACS_DATASET_CONFIGS.copy()
@@ -519,9 +530,9 @@ def load_task_data(tasks: str | list, data_dir: Path | str):
             acs_dataset = ACSDataset.make_from_task(
                 task=acs_task, cache_dir=data_dir, **acs_dataset_configs
             )
-            X_test, y_test = acs_dataset.get_data_split("test")
+            X_test, y_test = acs_dataset.get_data_split(split)
             data[task] = (X_test, y_test)
-        else:
+        elif task in TABLESHIFT_TASKS or task.startswith("BRFSS"):
             brfss_task = TableshiftBRFSSTaskMetadata.get_task(task)
             dataset_configs = (
                 folktexts.benchmark.Benchmark.TABLESHIFT_DATASET_CONFIGS.copy()
@@ -529,8 +540,10 @@ def load_task_data(tasks: str | list, data_dir: Path | str):
             ts_dataset = TableshiftBRFSSDataset.make_from_task(
                 task=brfss_task, cache_dir=data_dir, **dataset_configs
             )
-            X_test, y_test = ts_dataset.get_data_split("test")
+            X_test, y_test = ts_dataset.get_data_split(split)
             data[task] = (X_test, y_test)
+        else:
+            raise KeyError(f"{task} not in available tasks.")
     return data
 
 
@@ -541,10 +554,11 @@ def load_model_outputs_same_prompt(
 ):
     outputs = {}
     for task in tasks:
+        print(task)
         task_df = df[df["task"] == task]
         # get available models
         models = task_df["model"].unique().tolist()
-        models.sort(key=lambda m: get_model_size_B(m) + int(is_instruction_tuned(m)))
+        models.sort(key=lambda m: get_size(m) + int(is_instruction_tuned(m)))
         outputs_per_task = []
         for m in models:
             data_m = task_df[task_df["model"] == m]
