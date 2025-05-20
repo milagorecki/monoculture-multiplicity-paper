@@ -7,9 +7,9 @@ from .setup import (
     model_families,
     variations,
     map_feature_order_to_short,
-)  # LLM_MODELS, BASELINE_RESULTS_PATH,
+)
 import folktexts
-from folktexts._io import load_json  # , save_json
+from folktexts._io import load_json
 from folktexts.llm_utils import get_model_size_B
 from folktexts.acs import ACSTaskMetadata, ACSDataset
 from folktexts.ts import TableshiftBRFSSTaskMetadata, TableshiftBRFSSDataset
@@ -326,23 +326,6 @@ def create_result_df(
     return df
 
 
-def infer_treshold_fitted(file_path):
-    logging.warning("deprecated, threshold fitting is now documented in results")
-    print("Inferring whether threshold was fitted from file structure, prone to error.")
-    # infer whether the treshold was fitted on training examples based on
-    # - whether there are test_predictions in the same folder
-    # - if so, check if there is another folder
-    # e.g. BRFSS_Blood_Pressure_full_seed-42_hash-3784204307.test_predictions.csv
-    pattern_csv = r".*\.test_predictions\.csv$"
-    csv_file = list(find_files(Path(file_path).parent, pattern=pattern_csv))
-    # print("Infer if thrshold was fitted", Path(file_path).parent, csv_file)
-    if len(csv_file) > 0:
-        # check if there is another result folder
-        print("found prediction file, but need to check for other folder")
-    else:
-        return len(csv_file) == 0
-
-
 def find_files(root_folder, pattern, dir_pattern=""):
     # Compile the regular expression pattern
     regex = re.compile(pattern)
@@ -357,6 +340,7 @@ def find_files(root_folder, pattern, dir_pattern=""):
 
 
 def parse_model_name(name: str) -> str:
+    """Parse model name from model key"""
     name = name[name.find("--") + 2 :]
     return name
 
