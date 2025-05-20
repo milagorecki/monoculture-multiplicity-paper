@@ -4,6 +4,8 @@ from .setup import (
     LLM_MODELS,
     ACS_TASKS,
     TABLESHIFT_TASKS,
+    RESULTS_CSV_SAME_PROMPT,
+    RESULTS_CSV_VARY_PROMPT,
     model_families,
     variations,
     map_feature_order_to_short,
@@ -18,135 +20,11 @@ import torch
 import pandas as pd
 from pathlib import Path
 import logging
+from functools import partial
 
-# --------------------------------------
-# Utils
-# --------------------------------------
-
-
-def model_to_key(str: str):
-    return str.replace("/", "--")
-
-
-def key_to_model(str: str):
-    return str.replace("--", "/")
-
-
-def prettify_model_name(model_hf_name: str) -> str:
-    """Get prettified version of the given model name."""
-    dct = {
-        # Google Gemma models
-        "google/gemma-1.1-2b-it": "Gemma 2B (it)",
-        "google/gemma-1.1-7b-it": "Gemma 7B (it)",
-        "google/gemma-2b": "Gemma 2B",
-        "google/gemma-7b": "Gemma 7B",
-        "google/gemma-2-9b": "Gemma 2 9B",
-        "google/gemma-2-9b-it": "Gemma 2 9B (it)",
-        "google/gemma-2-27b": "Gemma 2 27B",
-        "google/gemma-2-27b-it": "Gemma 2 27B (it)",
-        # Meta Llama models
-        "meta-llama/Meta-Llama-3-70B": "Llama 3 70B",
-        "meta-llama/Meta-Llama-3-70B-Instruct": "Llama 3 70B (it)",
-        "meta-llama/Meta-Llama-3-8B": "Llama 3 8B",
-        "meta-llama/Meta-Llama-3-8B-Instruct": "Llama 3 8B (it)",
-        "meta-llama/Meta-Llama-3.1-8B": "Llama 3.1 8B",
-        "meta-llama/Meta-Llama-3.1-8B-Instruct": "Llama 3.1 8B (it)",
-        "meta-llama/Meta-Llama-3.1-70B": "Llama 3.1 70B",
-        "meta-llama/Meta-Llama-3.1-70B-Instruct": "Llama 3.1 70B (it)",
-        "meta-llama/Meta-Llama-3.2-1B": "Llama 3.2 1B",
-        "meta-llama/Meta-Llama-3.2-1B-Instruct": "Llama 3.2 1B (it)",
-        "meta-llama/Meta-Llama-3.2-3B": "Llama 3.2 3B",
-        "meta-llama/Meta-Llama-3.2-3B-Instruct": "Llama 3.2 3B (it)",
-        "meta-llama/Meta-Llama-3.3-70B-Instruct": "Llama 3.3 70B (it)",
-        # Mistral AI models
-        "mistralai/Mistral-7B-Instruct-v0.2": "Mistral 7B (it)",
-        "mistralai/Mistral-7B-v0.1": "Mistral 7B",
-        "mistralai/Mixtral-8x22B-Instruct-v0.1": "Mixtral 8x22B (it)",
-        "mistralai/Mixtral-8x22B-v0.1": "Mixtral 8x22B",
-        "mistralai/Mixtral-8x7B-Instruct-v0.1": "Mixtral 8x7B (it)",
-        "mistralai/Mixtral-8x7B-v0.1": "Mixtral 8x7B",
-        "mistralai/Mistral-Small-24B-Base-2501": "Mistral Small 24B",
-        "mistralai/Mistral-Small-24B-Instruct-2501": "Mistral Small 24B (it)",
-        # Yi models
-        "01-ai/Yi-34B": "Yi 34B",
-        "01-ai/Yi-34B-Chat": "Yi 34B (chat)",
-        "01-ai/Yi-6B-Chat": "Yi 6B (chat)",
-        "01-ai/Yi-6B": "Yi 6B",
-        "01-ai/Yi-1.5-6B": "Yi 1.5 6B",
-        # Qwen2 models
-        "Qwen/Qwen2-1.5B": "Qwen 2 1.5B",
-        "Qwen/Qwen2-1.5B-Instruct": "Qwen 2 1.5B (it)",
-        "Qwen/Qwen2-7B": "Qwen 2 7B",
-        "Qwen/Qwen2-7B-Instruct": "Qwen 2 7B (it)",
-        "Qwen/Qwen2-72B": "Qwen 2 72B",
-        "Qwen/Qwen2-72B-Instruct": "Qwen 2 72B (it)",
-        "Qwen/Qwen2.5-7B": "Qwen 2.5 7B",
-        "Qwen/Qwen2.5-7B-Instruct": "Qwen 2.5 7B (it)",
-        "Qwen/Qwen2.5-72B": "Qwen 2.5 72B",
-        "Qwen/Qwen2.5-72B-Instruct": "Qwen 2.5 72B (it)",
-        # Tabula
-        "mlfoundations/tabula-8b": "Tabula 8B",
-        # Olmo
-        "allenai/OLMo-1B-0724-hf": "OLMo 1B 0724",
-        "allenai/OLMo-1B-hf": "OLMo 1B",
-        "allenai/OLMo-7B-0724-hf": "OLMo 7B 0724",
-        "allenai/OLMo-7B-hf": "OLMo 7B",
-        "allenai/OLMo-7B-Instruct-hf": "OLMo 7B (it)",
-        "allenai/OLMo-2-1124-7B": "OLMo 2 7B",
-        "allenai/OLMo-2-1124-7B-Instruct": "OLMo 2 7B (it)",
-        # GPT
-        "gpt-3.5-turbo-0125": "GPT 3.5",
-        "gpt-4.1": "GPT 4.1",
-    }
-
-    if model_hf_name in dct:
-        return dct[model_hf_name]
-    else:
-        print(f"Couldn't find prettified name for {model_hf_name}.")
-        return model_hf_name
-
-
-def is_instruction_tuned(model_hf_name: str) -> bool:
-    """Indicator if a model is instruction tuned (solely inferred from the model name).
-
-    Args:
-        model_name (str): name of the model
-
-    Returns:
-        bool: model is instruction-finetuned
-    """
-    indicators = ["Instruct", "it", "Chat"]
-    return any(ind in model_hf_name for ind in indicators)
-
-
-def get_size(model_key):
-    if "gpt" in model_key:
-        return 10**11
-    # just a wrapper to facilitate imports
-    return get_model_size_B(model_key)
-
-
-def get_size_and_it(model_key, eps=0.001):
-    return get_size(model_key) + eps * int(is_instruction_tuned(model_key))
-
-
-def sort_by_size(models: list):
-    return sorted(models, key=get_size_and_it)
-
-
-def sort_by_size_and_family(models: list, factor=1000):
-    # factor to ensure model families are well separated
-    model_family_to_key = {k: v for v, k in enumerate(model_families, start=1)}
-
-    def sort_key(model_key):
-        return get_size_and_it(model_key) + factor * model_family_to_key.get(
-            next(
-                (mf for mf in model_families if mf.lower() in model_key.lower()), None
-            ),
-            -1,
-        )
-
-    return sorted(models, key=sort_key)
+# ---------------------
+# Data Loading
+# ---------------------
 
 
 def create_result_df(
@@ -274,7 +152,7 @@ def create_result_df(
                     prompt_feature_order,
                     file_path,
                     parsed_results["predictions_path"][
-                        parsed_results["predictions_path"].find("results/") :
+                        parsed_results["predictions_path"].find("results/"):
                     ],
                 ]
                 results_all_tasks.append(res)
@@ -339,26 +217,12 @@ def find_files(root_folder, pattern, dir_pattern=""):
                     yield os.path.join(dirpath, filename)
 
 
-def parse_model_name(name: str) -> str:
-    """Parse model name from model key"""
-    name = name[name.find("--") + 2 :]
-    return name
+_model_col = "config_model_name"
+_feature_subset_col = "config_feature_subset"
+_population_subset_col = "config_population_filter"
 
-
-def get_base_name(name):
-    name = re.sub(r"-(Instruct|Chat|it|1\.1)$", "", name, count=1)
-    name = re.sub(r"-v0\.2$", "-v0.1", name, count=1)
-    return name
-
-
-model_col = "config_model_name"
-# model_col = "model_name"
-feature_subset_col = "config_feature_subset"
-population_subset_col = "config_population_filter"
-predictions_path_col = "predictions_path"
-
-uses_all_features_col = "uses_all_features"
-uses_all_samples_col = "uses_all_samples"
+_uses_all_features_col = "uses_all_features"
+_uses_all_samples_col = "uses_all_samples"
 
 
 def parse_results_dict(dct) -> dict:
@@ -375,15 +239,15 @@ def parse_results_dict(dct) -> dict:
             dct[f"config_{key}"] = val
 
     # Parse model name
-    dct[model_col] = parse_model_name(dct[model_col])
-    dct[uses_all_features_col] = dct[feature_subset_col] is None
-    if dct[feature_subset_col] is None:
-        dct[feature_subset_col] = "full"
+    dct[_model_col] = parse_model_name(dct[_model_col])
+    dct[_uses_all_features_col] = dct[_feature_subset_col] is None
+    if dct[_feature_subset_col] is None:
+        dct[_feature_subset_col] = "full"
 
-    dct[uses_all_samples_col] = dct[population_subset_col] is None
+    dct[_uses_all_samples_col] = dct[_population_subset_col] is None
 
-    dct["base_name"] = get_base_name(dct[model_col])
-    dct["is_inst"] = dct["base_name"] != dct[model_col]
+    dct["base_name"] = get_base_name(dct[_model_col])
+    dct["is_inst"] = dct["base_name"] != dct[_model_col]
 
     for key, val in dct.items():
         if isinstance(val, dict):
@@ -449,6 +313,139 @@ def get_predictions(
     return risk_scores.map(lambda x: int(x >= threshold))
 
 
+def load_task_data(tasks: str | list, data_dir: Path | str, split: str = "test"):
+    if isinstance(tasks, str):
+        tasks = [tasks]
+    if isinstance(data_dir, str):
+        data_dir = Path(data_dir)
+    data = {}
+    for task in tasks:
+        print(task)
+        logging.info(f"Loading data for task {task}.")
+        if task in ACS_TASKS or task.startswith("ACS"):
+            acs_task = ACSTaskMetadata.get_task(task)
+            acs_dataset_configs = (
+                folktexts.benchmark.Benchmark.ACS_DATASET_CONFIGS.copy()
+            )
+            dataset = ACSDataset.make_from_task(
+                task=acs_task, cache_dir=data_dir, **acs_dataset_configs
+            )
+        elif task in TABLESHIFT_TASKS or task.startswith("BRFSS"):
+            brfss_task = TableshiftBRFSSTaskMetadata.get_task(task)
+            dataset_configs = (
+                folktexts.benchmark.Benchmark.TABLESHIFT_DATASET_CONFIGS.copy()
+            )
+            dataset = TableshiftBRFSSDataset.make_from_task(
+                task=brfss_task, cache_dir=data_dir, **dataset_configs
+            )
+        else:
+            raise KeyError(f"{task} not in available tasks.")
+        X_test, y_test = dataset.get_data_split(split)
+        data[task] = (X_test, y_test)
+    return data
+
+
+def load_data_if_needed(data, tasks, data_dir: Path = Path("./data")):
+    if data is None:
+        return load_task_data(tasks, data_dir=data_dir)
+    elif not all([t in data.keys() for t in tasks]):
+        tasks_missing = [t for t in tasks if t not in data.keys()]
+        for t in tasks_missing:
+            print(f"add {t} to data")
+            data_t = load_task_data(t, Path("./data"))
+            data.update(data_t)
+    return data
+
+
+def load_model_outputs_same_prompt(
+    df: pd.DataFrame,
+    tasks: list[str] = ACS_TASKS + TABLESHIFT_TASKS,
+    return_risk_scores: bool = True,
+):
+    mask_same_prompt = (
+        (df["prompt_format"] == "bullet")
+        & (df["prompt_connector"] == "is")
+        & (df["prompt_granularity"] == "original")
+        & (df["prompt_feature_order"] == "default")
+    )
+    outputs = {}
+    for task in tasks:
+        print(task)
+        task_df = df[mask_same_prompt & (df["task"] == task)]
+        # get available models
+        models = task_df["model"].unique().tolist()
+        models.sort(key=lambda m: get_size(m) + int(is_instruction_tuned(m)))
+        outputs_per_task = []
+        for m in models:
+            data_m = task_df[task_df["model"] == m]
+            if data_m.shape[0] != 1:
+                logging.warning(
+                    f"Expected 1 row for model {m}, but found {data_m.shape[0]}. Skipping this model.\n {data_m}"
+                )
+                continue
+            if return_risk_scores:
+                outputs_per_task.append(
+                    load_risk_scores(data_m.iloc[0]["predictions_path"])
+                )
+            else:
+                outputs_per_task.append(
+                    get_predictions(
+                        csv_path=data_m.iloc[0]["predictions_path"],
+                        eval_json_path=data_m.iloc[0]["eval_results_path"],
+                    )
+                )
+        logging.debug(task, len(outputs_per_task))
+        if len(outputs_per_task) > 0:
+            outputs[task] = pd.concat(outputs_per_task, axis=1)
+    return outputs
+
+
+def load_results_overview(
+    num_shots: int = 0, threshold_fitted: int = True, same_prompt: bool = True
+):
+    assert (
+        RESULTS_CSV_SAME_PROMPT.is_file()
+        if same_prompt
+        else RESULTS_CSV_VARY_PROMPT.is_file()
+    ), "Results file does not seem to exist."
+    df = pd.read_csv(
+        RESULTS_CSV_SAME_PROMPT if same_prompt else RESULTS_CSV_VARY_PROMPT
+    )
+    mask = (df["num_shots"] == num_shots) & (
+        df["threshold_fitted"] == int(threshold_fitted)
+    )
+    if same_prompt:
+        # restrict to default prompting style
+        mask_same_prompt = (
+            (df["prompt_format"] == "bullet")
+            & (df["prompt_connector"] == "is")
+            & (df["prompt_granularity"] == "original")
+            & (df["prompt_feature_order"] == "default")
+        )
+        mask &= mask_same_prompt
+    return df[mask]
+
+
+def add_evals_to_df(
+    df,
+    metrics=[
+        # "n_samples",
+        # "accuracy",
+        "fpr",
+        "fnr",
+        # "ppr",
+        # "num_pred_negatives",
+        # "num_pred_positives",
+        "balanced_accuracy",
+    ],
+):
+    for metric in metrics:
+        df[metric] = (
+            df["eval_results_path"].apply(partial(get_metric, metric=metric)).copy()
+        )
+    return df
+
+
 def get_metric(json_path: str | Path, metric: str = "accuracy"):
     """
     Retrieves the specified metric from a benchmark results file.
@@ -479,6 +476,250 @@ def get_metrics(json_path: str | Path, metrics: list[str]):
     return {metric: evals[metric] for metric in metrics}
 
 
+# ---------------------
+# Filter predictions
+# ---------------------
+
+
+def filter_by_label(predictions, data, label_val):
+    y_true = data[1]
+    filter_idx = y_true[y_true == label_val].index
+    predictions = predictions.loc[filter_idx]
+    data = (data[0].loc[filter_idx], data[1].loc[filter_idx])
+    return predictions, data
+
+
+def filter_top_models_by_eps(df, eps=0.05):
+    # sort by acc
+    df_sorted_by_acc = df.sort_values(by="accuracy", ascending=False)
+    # top acc
+    top_acc = df_sorted_by_acc.iloc[0]["accuracy"].item()
+    # filter models
+    models = df[df["accuracy"] >= top_acc - eps]["model"].to_list()
+    return sorted(models, key=get_size_and_it)
+
+
+def filter_top_models_by_k(df, k=10):
+    # sort by acc
+    df_sorted_by_acc = df.sort_values(by="accuracy", ascending=False)
+    # get top k models
+    models = df_sorted_by_acc.iloc[:k]["model"].to_list()
+    return sorted(models, key=get_size_and_it)
+
+
+def filter_models_better_const(df, y_true):
+    const_acc = max((y_true == 1).sum(), (y_true == 0).sum()) / y_true.shape[0]
+    models = df["model"][df["accuracy"] > const_acc].to_list()
+    return sorted(models, key=get_size_and_it)
+
+
+def filter_results(
+    predictions,
+    df,
+    data,
+    tasks,
+    restrict_to_better_const=True,
+    restrict_to_top_eps=True,
+    restrict_to_topk=False,
+    topk=10,
+    eps=0.05,
+    restrict_to_positive_label=True,
+    restrict_to_negative_label=False,
+):
+    assert not (
+        restrict_to_positive_label & restrict_to_negative_label
+    ), "Choose one or none."
+
+    requires_true_labels = (
+        restrict_to_better_const
+        or restrict_to_positive_label
+        or restrict_to_negative_label
+    )
+
+    if requires_true_labels:
+        assert data is not None, "Provide data"
+        # load data if needed
+        # data = load_data_if_needed(data=data, tasks=tasks)
+        for task in tasks:
+            task_df = df[df["task"] == task]
+
+            if restrict_to_better_const:
+                models = filter_models_better_const(df=task_df, y_true=data[task][1])
+                predictions[task] = predictions[task].filter(items=models)
+
+            if restrict_to_positive_label or restrict_to_negative_label:
+                label_val = int(restrict_to_positive_label)
+                predictions[task], data[task] = filter_by_label(
+                    predictions=predictions[task],
+                    data=data[task],
+                    label_val=label_val,
+                )
+            print(task, predictions[task].shape)
+
+    if restrict_to_top_eps or restrict_to_topk:
+        for task in tasks:
+            task_df = df[df["task"] == task]
+            if restrict_to_topk:
+                models = filter_top_models_by_k(df=task_df, k=topk)
+                predictions[task] = predictions[task].filter(items=models)
+            if restrict_to_top_eps:
+                models = filter_top_models_by_eps(df=task_df, eps=eps)
+                predictions[task] = predictions[task].filter(items=models)
+            print(task, predictions[task].shape)
+    return predictions, data
+
+
+# ---------------------
+# Other Utils
+# ---------------------
+
+
+def model_to_key(str: str):
+    return str.replace("/", "--")
+
+
+def key_to_model(str: str):
+    return str.replace("--", "/")
+
+
+def prettify_model_name(model_hf_name: str) -> str:
+    """Get prettified version of the given model name."""
+    dct = {
+        # Google Gemma models
+        "google/gemma-1.1-2b-it": "Gemma 2B (it)",
+        "google/gemma-1.1-7b-it": "Gemma 7B (it)",
+        "google/gemma-2b": "Gemma 2B",
+        "google/gemma-7b": "Gemma 7B",
+        "google/gemma-2-9b": "Gemma 2 9B",
+        "google/gemma-2-9b-it": "Gemma 2 9B (it)",
+        "google/gemma-2-27b": "Gemma 2 27B",
+        "google/gemma-2-27b-it": "Gemma 2 27B (it)",
+        # Meta Llama models
+        "meta-llama/Meta-Llama-3-70B": "Llama 3 70B",
+        "meta-llama/Meta-Llama-3-70B-Instruct": "Llama 3 70B (it)",
+        "meta-llama/Meta-Llama-3-8B": "Llama 3 8B",
+        "meta-llama/Meta-Llama-3-8B-Instruct": "Llama 3 8B (it)",
+        "meta-llama/Meta-Llama-3.1-8B": "Llama 3.1 8B",
+        "meta-llama/Meta-Llama-3.1-8B-Instruct": "Llama 3.1 8B (it)",
+        "meta-llama/Meta-Llama-3.1-70B": "Llama 3.1 70B",
+        "meta-llama/Meta-Llama-3.1-70B-Instruct": "Llama 3.1 70B (it)",
+        "meta-llama/Meta-Llama-3.2-1B": "Llama 3.2 1B",
+        "meta-llama/Meta-Llama-3.2-1B-Instruct": "Llama 3.2 1B (it)",
+        "meta-llama/Meta-Llama-3.2-3B": "Llama 3.2 3B",
+        "meta-llama/Meta-Llama-3.2-3B-Instruct": "Llama 3.2 3B (it)",
+        "meta-llama/Meta-Llama-3.3-70B-Instruct": "Llama 3.3 70B (it)",
+        # Mistral AI models
+        "mistralai/Mistral-7B-Instruct-v0.2": "Mistral 7B (it)",
+        "mistralai/Mistral-7B-v0.1": "Mistral 7B",
+        "mistralai/Mixtral-8x22B-Instruct-v0.1": "Mixtral 8x22B (it)",
+        "mistralai/Mixtral-8x22B-v0.1": "Mixtral 8x22B",
+        "mistralai/Mixtral-8x7B-Instruct-v0.1": "Mixtral 8x7B (it)",
+        "mistralai/Mixtral-8x7B-v0.1": "Mixtral 8x7B",
+        "mistralai/Mistral-Small-24B-Base-2501": "Mistral Small 24B",
+        "mistralai/Mistral-Small-24B-Instruct-2501": "Mistral Small 24B (it)",
+        # Yi models
+        "01-ai/Yi-34B": "Yi 34B",
+        "01-ai/Yi-34B-Chat": "Yi 34B (chat)",
+        "01-ai/Yi-6B-Chat": "Yi 6B (chat)",
+        "01-ai/Yi-6B": "Yi 6B",
+        "01-ai/Yi-1.5-6B": "Yi 1.5 6B",
+        # Qwen2 models
+        "Qwen/Qwen2-1.5B": "Qwen 2 1.5B",
+        "Qwen/Qwen2-1.5B-Instruct": "Qwen 2 1.5B (it)",
+        "Qwen/Qwen2-7B": "Qwen 2 7B",
+        "Qwen/Qwen2-7B-Instruct": "Qwen 2 7B (it)",
+        "Qwen/Qwen2-72B": "Qwen 2 72B",
+        "Qwen/Qwen2-72B-Instruct": "Qwen 2 72B (it)",
+        "Qwen/Qwen2.5-7B": "Qwen 2.5 7B",
+        "Qwen/Qwen2.5-7B-Instruct": "Qwen 2.5 7B (it)",
+        "Qwen/Qwen2.5-72B": "Qwen 2.5 72B",
+        "Qwen/Qwen2.5-72B-Instruct": "Qwen 2.5 72B (it)",
+        # Tabula
+        "mlfoundations/tabula-8b": "Tabula 8B",
+        # Olmo
+        "allenai/OLMo-1B-0724-hf": "OLMo 1B 0724",
+        "allenai/OLMo-1B-hf": "OLMo 1B",
+        "allenai/OLMo-7B-0724-hf": "OLMo 7B 0724",
+        "allenai/OLMo-7B-hf": "OLMo 7B",
+        "allenai/OLMo-7B-Instruct-hf": "OLMo 7B (it)",
+        "allenai/OLMo-2-1124-7B": "OLMo 2 7B",
+        "allenai/OLMo-2-1124-7B-Instruct": "OLMo 2 7B (it)",
+        # GPT
+        "gpt-3.5-turbo-0125": "GPT 3.5",
+        "gpt-4.1": "GPT 4.1",
+    }
+
+    if model_hf_name in dct:
+        return dct[model_hf_name]
+    else:
+        print(f"Couldn't find prettified name for {model_hf_name}.")
+        return model_hf_name
+
+
+def is_instruction_tuned(model_hf_name: str) -> bool:
+    """Indicator if a model is instruction tuned (solely inferred from the model name).
+
+    Args:
+        model_name (str): name of the model
+
+    Returns:
+        bool: model is instruction-finetuned
+    """
+    indicators = ["Instruct", "it", "Chat"]
+    return any(ind in model_hf_name for ind in indicators)
+
+
+def get_size(model_key):
+    if "gpt" in model_key:
+        return 10**11
+    # just a wrapper to facilitate imports
+    return get_model_size_B(model_key)
+
+
+def get_size_and_it(model_key, eps=0.001):
+    return get_size(model_key) + eps * int(is_instruction_tuned(model_key))
+
+
+def sort_by_size(models: list):
+    return sorted(models, key=get_size_and_it)
+
+
+def sort_by_size_and_family(models: list, factor=1000):
+    # factor to ensure model families are well separated
+    model_family_to_key = {k: v for v, k in enumerate(model_families, start=1)}
+
+    def sort_key(model_key):
+        return get_size_and_it(model_key) + factor * model_family_to_key.get(
+            next(
+                (mf for mf in model_families if mf.lower() in model_key.lower()), None
+            ),
+            -1,
+        )
+
+    return sorted(models, key=sort_key)
+
+
+def df_to_dict(df):
+    """
+    Converts a two-column DataFrame into a dictionary, ignoring the index.
+    Assumes the first column is keys and the second column is values.
+    """
+    assert df.shape[1] == 2, "Assume df has 2 columns"
+    return dict(zip(df.iloc[:, 0], df.iloc[:, 1]))
+
+
+def parse_model_name(name: str) -> str:
+    """Parse model name from model key"""
+    name = name[name.find("--") + 2:]
+    return name
+
+
+def get_base_name(name):
+    name = re.sub(r"-(Instruct|Chat|it|1\.1)$", "", name, count=1)
+    name = re.sub(r"-v0\.2$", "-v0.1", name, count=1)
+    return name
+
+
 def cumulative_sum(tensor: torch.Tensor, end=None):
     if end == "left":
         # from right to left (total at xmin)
@@ -495,74 +736,3 @@ def truncate(num: float, digits: int = 6) -> float:
 def binarize_using_threshold(col, evals: dict):
     m = col.name
     return col > evals[m]["threshold"]
-
-
-def load_task_data(tasks: str | list, data_dir: Path | str, split: str = "test"):
-    if isinstance(tasks, str):
-        tasks = [tasks]
-    if isinstance(data_dir, str):
-        data_dir = Path(data_dir)
-    data = {}
-    for task in tasks:
-        print(task)
-        logging.info(f"Loading data for task {task}.")
-        if task in ACS_TASKS or task.startswith("ACS"):
-            acs_task = ACSTaskMetadata.get_task(task)
-            acs_dataset_configs = (
-                folktexts.benchmark.Benchmark.ACS_DATASET_CONFIGS.copy()
-            )
-            acs_dataset = ACSDataset.make_from_task(
-                task=acs_task, cache_dir=data_dir, **acs_dataset_configs
-            )
-            X_test, y_test = acs_dataset.get_data_split(split)
-            data[task] = (X_test, y_test)
-        elif task in TABLESHIFT_TASKS or task.startswith("BRFSS"):
-            brfss_task = TableshiftBRFSSTaskMetadata.get_task(task)
-            dataset_configs = (
-                folktexts.benchmark.Benchmark.TABLESHIFT_DATASET_CONFIGS.copy()
-            )
-            ts_dataset = TableshiftBRFSSDataset.make_from_task(
-                task=brfss_task, cache_dir=data_dir, **dataset_configs
-            )
-            X_test, y_test = ts_dataset.get_data_split(split)
-            data[task] = (X_test, y_test)
-        else:
-            raise KeyError(f"{task} not in available tasks.")
-    return data
-
-
-def load_model_outputs_same_prompt(
-    df: pd.DataFrame,
-    tasks: list[str] = ACS_TASKS + TABLESHIFT_TASKS,
-    return_risk_scores: bool = True,
-):
-    outputs = {}
-    for task in tasks:
-        print(task)
-        task_df = df[df["task"] == task]
-        # get available models
-        models = task_df["model"].unique().tolist()
-        models.sort(key=lambda m: get_size(m) + int(is_instruction_tuned(m)))
-        outputs_per_task = []
-        for m in models:
-            data_m = task_df[task_df["model"] == m]
-            if data_m.shape[0] != 1:
-                logging.warning(
-                    f"Expected 1 row for model {m}, but found {data_m.shape[0]}. Skipping this model.\n {data_m}"
-                )
-                continue
-            if return_risk_scores:
-                outputs_per_task.append(
-                    load_risk_scores(data_m.iloc[0]["predictions_path"])
-                )
-            else:
-                outputs_per_task.append(
-                    get_predictions(
-                        csv_path=data_m.iloc[0]["predictions_path"],
-                        eval_json_path=data_m.iloc[0]["eval_results_path"],
-                    )
-                )
-        logging.debug(task, len(outputs_per_task))
-        if len(outputs_per_task) > 0:
-            outputs[task] = pd.concat(outputs_per_task, axis=1)
-    return outputs
