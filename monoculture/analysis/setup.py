@@ -1,12 +1,12 @@
-# defining some global variables or info
 from pathlib import Path
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import HistGradientBoostingClassifier
 from xgboost import XGBClassifier
 from sklearn.dummy import DummyClassifier
+from sklearn.neural_network import MLPClassifier
 
 
-ACS_TASKS = (  # all ACS prediction tasks
+ACS_TASKS = (
     "ACSIncome",
     "ACSEmployment",
     "ACSMobility",
@@ -17,7 +17,7 @@ ACS_TASKS = (  # all ACS prediction tasks
 TABLESHIFT_TASKS = (
     "BRFSS_Diabetes",
     "BRFSS_Blood_Pressure",
-)  # all tableshift tasks
+)
 
 LLM_MODELS = [
     # Google Gemma2 models
@@ -101,10 +101,9 @@ model_families_coarse = sorted(
         "Qwen",
         "Yi",
     ]
-)  # "Claude",  "GPT",
+)  # "GPT",
 model_families = sorted(
     [
-        # "Claude",
         "Gemma 2",
         "Gemma",
         # "GPT",
@@ -119,12 +118,12 @@ model_families = sorted(
     ]
 )
 
-# Baselines
-baselines = {
+BASELINES = {
     "Constant": DummyClassifier(strategy="prior"),
-    "LR": LogisticRegression(),
+    "LogisticRegression": LogisticRegression(),
     "GBM": HistGradientBoostingClassifier(),
     "XGBoost": XGBClassifier(),
+    "NN": MLPClassifier(),
 }
 BASELINE_RESULTS_PATH = Path("./results/baselines")
 
