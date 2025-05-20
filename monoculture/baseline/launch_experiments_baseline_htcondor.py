@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Launch htcondor jobs for all ACS benchmark experiments."""
 import argparse
-import math
 from pathlib import Path
 from pprint import pprint
 
@@ -12,11 +11,9 @@ from folktexts.cli.experiments import Experiment, launch_experiment_job
 import logging
 
 from monoculture.analysis.setup import ACS_TASKS, TABLESHIFT_TASKS
+from monoculture.baseline import BASELINES
 
 TASKS = ACS_TASKS + TABLESHIFT_TASKS
-
-# Baselines to evaluate
-from monoculture.baseline import BASELINES
 
 ################
 # Useful paths #

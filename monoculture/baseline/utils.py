@@ -1,6 +1,8 @@
 from monoculture.analysis.setup import BASELINE_RESULTS_PATH
 from folktexts._io import load_json
 import pandas as pd
+import os
+from pathlib import Path
 
 
 def load_baselines(baselines: dict, tasks: list, rerun: bool = False) -> tuple:
@@ -11,15 +13,36 @@ def load_baselines(baselines: dict, tasks: list, rerun: bool = False) -> tuple:
         results = {}
         risk_scores = []
         for clf_name, clf in baselines.items():
-            clf_path = BASELINE_RESULTS_PATH / f"{clf_name}_task-{task_name}"
-            if (clf_path).exists() and not rerun:
-                print(f"- {clf_name}: Load predictions from '{clf_path}'.")
-                scores = pd.read_csv(
-                    clf_path / f"{task_name}.test_predictions.csv", index_col=0
+            clf_path = (
+                BASELINE_RESULTS_PATH
+                / f"model-{clf_name}"
+                / f"{clf_name}_task-{task_name}"
+            )
+            json_path = None
+            csv_path = None
+            bench_folders = [
+                f
+                for f in os.listdir(clf_path)
+                if os.path.isdir(os.path.join(clf_path, f))
+            ]
+            assert len(bench_folders) == 1
+            for bench in bench_folders:
+                for subroot, subdirs, files in os.walk(Path(clf_path) / bench):
+                    for file in files:
+                        if file.endswith(".json"):
+                            json_path = Path(clf_path) / bench / file
+                        elif file.endswith(".csv"):
+                            csv_path = Path(clf_path) / bench / file
+                        if json_path and csv_path:
+                            break
+            if json_path and csv_path:
+                print(f"- {clf_name}: Load predictions from '{Path(clf_path)/bench}'.")
+                scores = (
+                    pd.read_csv(csv_path, index_col=0)
+                    .drop("label", axis=1)
+                    .rename(columns={"risk_score": clf_name})
                 )
-                prediction_eval = load_json(
-                    path=clf_path / f"{task_name}-results.bench.json"
-                )
+                prediction_eval = load_json(json_path)
             else:
                 print(f"Skipping {clf_name}")
                 prediction_eval = {}

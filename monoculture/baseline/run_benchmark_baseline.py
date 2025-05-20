@@ -17,8 +17,8 @@ usage:
             [--logger-level {DEBUG,INFO,WARNING,ERROR,CRITICAL}]
     - example: python baseline/run_acs_benchmark_baseline.py
                 --model GBM
-                --results-dir '../results/baseline-test/'
-                --data-dir '../../llm_fairness/folktexts/data/'
+                --results-dir '../results/baselines/'
+                --data-dir '../data/'
                 --clf-params "learning_rate=0.2 max_depth=5 max_iter=200"
 
 """
