@@ -5,6 +5,11 @@ from xgboost import XGBClassifier
 from sklearn.dummy import DummyClassifier
 from sklearn.neural_network import MLPClassifier
 
+RESULTS_ROOT_DIR = Path("./results/")
+RESULTS_CSV_SAME_PROMPT = RESULTS_ROOT_DIR / "overview_results_by_prompt_style.csv"
+RESULTS_CSV_VARY_PROMPT = RESULTS_ROOT_DIR / "overview_results_variations.csv"
+FIGURES_ROOT_DIR = RESULTS_ROOT_DIR / "figures/"
+
 
 ACS_TASKS = (
     "ACSIncome",
