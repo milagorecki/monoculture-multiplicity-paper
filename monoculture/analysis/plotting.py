@@ -571,7 +571,7 @@ def plot_recourse_lineplot(
     fraction_individuals = torch.arange(N, dtype=torch.float32)
     if relative_x:
         fraction_individuals /= N
-        ax.set_xlim(-0.01, 1.01)
+        ax.set_xlim(-0.01, 1.05)
 
     # plot observed
     M_not_na = predictions.notna().sum(axis=1).to_numpy()
@@ -1054,7 +1054,7 @@ def plot_agreement_lineplot(
         zorder=-2,
     )
     ax.set_ylim(bottom=ylim[0], top=ylim[1] + 0.01)
-    ax.set_xlim(0, 1)
+    ax.set_xlim(0, 1.05)
     ax.set_title(title.replace("ACS", "ACS ").replace("_", " "))
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
