@@ -1,6 +1,45 @@
 # Algorithmic Monoculture and Multiplicity
 
 
+## Initial steps to reproduce
+- create a virtual environment running: `conda env create -f environment.yml`
+    - this will install folktexts and tableshift
+    - TODO: how to handle forks?
+- clone the folktexts package (see [instructions](https://github.com/socialfoundations/folktexts))
+- run `python scripts/load_datasets.py` to load all datasets (TODO: from where)
+    - note: for BRFSS datasets preprocessor is set to passthrough, s.t. no normalization of numeric features or one-hot-encoding of categorical features is done
+
+## Getting Model Predictions
+From inside the folktexts package, run 
+```
+# 0-shot 
+python -m folktexts.cli.launch_experiments_htcondor --executable-path ./folktexts/cli/run_benchmark.py --results-dir '<path/to/results/folder/>' --task=<task>> --models-dir '<path/to/models/>' --model=google/gemma-2b --fit-threshold=2000 --variation="format=bullet;connector=is;granularity=original;order=AGEP,COW,SCHL,MAR,OCCP,POBP,RELP,WKHP,SEX,RAC1P"
+
+# 10-shot
+python -m folktexts.cli.launch_experiments_htcondor --executable-path ./folktexts/cli/run_benchmark.py --results-dir '<path/to/results/folder/>' --task=<task>> --models-dir '<path/to/models/>' --model=google/gemma-2b --fit-threshold=2000 --reuse-few-shot-examples=True --few-shot=10 --balance-few-shot-examples=True --variation="format=bullet;connector=is;granularity=original;order=AGEP,COW,SCHL,MAR,OCCP,POBP,RELP,WKHP,SEX,RAC1P"
+```
+
+See (https://github.com/socialfoundations/folktexts)
+## Baseline Predictions
+From inside the monoculture package, run
+```
+python -m  monoculture.baseline.run_acs_benchmark_baseline --model Constant --results-dir '<path/to/results/folder/>' --data-dir '../folktexts-adapted/data/' --task <task>
+```
+
+
+## Analysis model prediction for monoculture and multiplicity 
+- metrics are collected in `metrics.py`
+- for plotting 
+
+
+## Available predictions 
+TODO: make model predictions on ACSIncome available 
+
+
+
+
+ <!-- Old below -->
+
 ## Loading Tableshift Tasks
 
 - clone TableShift fork: https://github.com/milagorecki/tableshift
