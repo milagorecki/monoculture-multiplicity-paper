@@ -1,7 +1,7 @@
 # Measure reourse
 # Collect all analysis functionalities
 
-from typing import List, Union
+from typing import List, Union, Optional
 import pandas as pd
 import torch
 import itertools
@@ -17,12 +17,11 @@ from .utils import key_to_model
 # from functools import reduce
 # from operator import mul, add
 
-# -------------------------------------------------------------
-# AGREEMENT RATES
-# -------------------------------------------------------------
+# ------------------------------
+# Baseline
+# ------------------------------
 
 
-# AGREEMENT AT RANDOM
 def poisson_binom_agreement(
     baseline_rate: Union[List[float], torch.Tensor],
     k: int,
@@ -35,11 +34,15 @@ def poisson_binom_agreement(
     return sp.stats.poisson_binom.pmf(k=k, p=baseline_rate)
 
 
+# ------------------------------
+# Agreement and Recourse
+# ------------------------------
+
+
 def pairwise_agreement_at_random(acc1: float, acc2: float) -> float:
     return acc1 * acc2 + (1 - acc1) * (1 - acc2)
 
 
-# AGREEMENT OBSERVED
 def get_observed_pairwise_agreement_rate(
     predictions_m1: Union[pd.DataFrame, torch.Tensor],
     predictions_m2: Union[pd.DataFrame, torch.Tensor],
@@ -130,49 +133,21 @@ def diff_agreement_wrapper(m1, m2, predictions, evals, metric="accuracy"):
     return observed - expected
 
 
-def get_fraction_no_recourse(predictions_array: Union[np.array, torch.Tensor]):
-    if isinstance(predictions_array, torch.Tensor):
-        predictions_array = predictions_array.to_numpy()
-    predictions_array = predictions_array.astype(np.int8)
-    row_wise_or = np.bitwise_or.reduce(predictions_array, axis=1)
-    return np.sum(row_wise_or == 0) / predictions_array.shape[0]
-
-
-def get_observed_k_rejections(
-    k: int,
-    predictions: pd.DataFrame,
+def get_fraction_no_recourse(
+    predictions: Union[np.array, torch.Tensor],
     restrict_only_pos_instances=False,
     restrict_only_neg_instances=False,
-    true_labels: pd.Series = None,
+    count_acceptances=True,
 ):
-    N, M = predictions.shape
-
-    assert not (restrict_only_pos_instances and restrict_only_neg_instances)
-    if restrict_only_pos_instances:
-        assert true_labels is not None, "Provide labels to restrict data."
-        predictions = predictions[true_labels == 1]
-    elif restrict_only_neg_instances:
-        assert true_labels is not None, "Provide labels to restrict data."
-        predictions = predictions[true_labels == 1]
-    sum_rejected = M - predictions.sum(axis=1)
-    return sum_rejected[sum_rejected == k].shape[0]
-
-
-def get_obs_agreement_counts(
-    predictions: pd.DataFrame,
-    restrict_only_pos_instances=False,
-    restrict_only_neg_instances=False,
-    true_labels: pd.Series = None,
-):
-    assert not (restrict_only_pos_instances and restrict_only_neg_instances)
-    if restrict_only_pos_instances:
-        assert true_labels is not None, "Provide labels to restrict data."
-        predictions = predictions[true_labels == 1]
-    elif restrict_only_neg_instances:
-        assert true_labels is not None, "Provide labels to restrict data."
-        predictions = predictions[true_labels == 0]
-    num_accepting = predictions.sum(axis=1).values
-    return num_accepting
+    num_models, counts = get_model_agreement_histogram(
+        predictions=predictions,
+        restrict_only_pos_instances=restrict_only_pos_instances,
+        restrict_only_neg_instances=restrict_only_neg_instances,
+        count_acceptances=count_acceptances,
+        padding=True,
+    )
+    # no recourse: num_models = 0
+    return counts[0] / sum(counts)
 
 
 def get_obs_acceptance_aggregated(
@@ -180,31 +155,31 @@ def get_obs_acceptance_aggregated(
     restrict_only_pos_instances=False,
     restrict_only_neg_instances=False,
     true_labels: pd.Series = None,
-    padding=True,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    # if isinstance(predictions, pd.DataFrame):
-    #     predictions = predictions.to_numpy()
-    N, M = predictions.shape
-
-    assert not (restrict_only_pos_instances and restrict_only_neg_instances)
-    counts_accepting = get_obs_agreement_counts(
+):
+    return get_model_agreement_histogram(
         predictions=predictions,
-        restrict_only_neg_instances=restrict_only_neg_instances,
         restrict_only_pos_instances=restrict_only_pos_instances,
+        restrict_only_neg_instances=restrict_only_neg_instances,
         true_labels=true_labels,
-    )
-    # aggregate
-    num_models_accepting, counts = torch.Tensor(counts_accepting).unique(
-        return_counts=True
+        padding=True,
+        count_acceptances=True,
     )
 
-    if padding:
-        counts_padded = torch.zeros(M + 1)
-        for i in range(len(num_models_accepting)):
-            counts_padded[int(num_models_accepting[i])] = counts[i]
-        return torch.arange(M + 1), counts_padded
 
-    return num_models_accepting, counts
+def get_obs_rejections_aggregated(
+    predictions: Union[pd.DataFrame, torch.Tensor, np.array],
+    restrict_only_pos_instances=False,
+    restrict_only_neg_instances=False,
+    true_labels: pd.Series = None,
+):
+    return get_model_agreement_histogram(
+        predictions=predictions,
+        restrict_only_pos_instances=restrict_only_pos_instances,
+        restrict_only_neg_instances=restrict_only_neg_instances,
+        true_labels=true_labels,
+        padding=True,
+        count_acceptances=False,
+    )
 
 
 def get_fraction_obs_acceptance_aggregated(
@@ -212,54 +187,120 @@ def get_fraction_obs_acceptance_aggregated(
     restrict_only_pos_instances=False,
     restrict_only_neg_instances=False,
     true_labels: pd.Series = None,
-    padding=True,
+    padding=True,  # not used, fractions cannot be meaningfully padded
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    # if isinstance(predictions, pd.DataFrame):
-    #     predictions = predictions.to_numpy()
-    N, M = predictions.shape
-
-    assert not (restrict_only_pos_instances and restrict_only_neg_instances)
-    counts_accepting = get_obs_agreement_counts(
+    return get_model_agreement_histogram(
         predictions=predictions,
-        restrict_only_neg_instances=restrict_only_neg_instances,
         restrict_only_pos_instances=restrict_only_pos_instances,
+        restrict_only_neg_instances=restrict_only_neg_instances,
         true_labels=true_labels,
-    )
-    # aggregate
-    M_not_na = predictions.notna().sum(axis=1).to_numpy()
-    frac_models_accepting, counts = np.unique(
-        counts_accepting / M_not_na, return_counts=True
+        return_fractions=True,
+        padding=False,
+        count_acceptances=True,
     )
 
-    if padding:
-        counts_padded = torch.zeros(M + 1)
-        for i in range(len(frac_models_accepting)):
-            counts_padded[int(frac_models_accepting[i])] = counts[i]
-        return torch.arange(M + 1), counts_padded
 
-    return frac_models_accepting, counts
-
-
-def get_obs_rejections_aggregated(
-    predictions: pd.DataFrame,
+def get_fraction_obs_rejections_aggregated(
+    predictions: Union[pd.DataFrame, torch.Tensor, np.array],
     restrict_only_pos_instances=False,
     restrict_only_neg_instances=False,
     true_labels: pd.Series = None,
-    padding=True,
+    padding=False,  # not used, fractions cannot be meaningfully padded
+) -> tuple[torch.Tensor, torch.Tensor]:
+    return get_model_agreement_histogram(
+        predictions=predictions,
+        restrict_only_pos_instances=restrict_only_pos_instances,
+        restrict_only_neg_instances=restrict_only_neg_instances,
+        true_labels=true_labels,
+        return_fractions=True,
+        padding=False,
+        count_acceptances=False,
+    )
+
+
+def get_obs_agreement_counts(
+    predictions: Union[pd.DataFrame, torch.Tensor, np.ndarray],
+    true_labels: Optional[Union[pd.Series, torch.Tensor, np.ndarray]] = None,
+    restrict_only_pos_instances: bool = False,
+    restrict_only_neg_instances: bool = False,
+    return_fractions: bool = False,
+    count_acceptances: bool = True,
 ):
+
+    assert not (
+        restrict_only_pos_instances and restrict_only_neg_instances
+    ), "Cannot restrict to both positive and negative instances."
+
+    if isinstance(predictions, pd.DataFrame):
+        predictions = predictions.values
+    if isinstance(true_labels, pd.Series):
+        true_labels = true_labels.values
+
     N, M = predictions.shape
 
-    num_models_accepting, counts = get_obs_acceptance_aggregated(
-        predictions,
-        restrict_only_pos_instances,
-        restrict_only_neg_instances,
-        true_labels,
-        padding,
-    )
-    num_models_rejecting = num_models_accepting
-    counts = counts.flip(dims=[0])
+    # filter based on labels
+    if restrict_only_pos_instances or restrict_only_neg_instances:
+        assert true_labels is not None, "True labels are required to filter by label."
+        label_val = int(restrict_only_pos_instances)
+        mask = true_labels == label_val
+        predictions = predictions[mask]
 
-    return num_models_rejecting, counts
+    counts_per_instance = predictions.sum(axis=1)
+    if not count_acceptances:
+        counts_per_instance = M - counts_per_instance
+
+    if return_fractions:
+        # filter out NaN values to compute fractions
+        total_not_na_counts = np.sum(~np.isnan(predictions), axis=1)
+        counts_per_instance = counts_per_instance / total_not_na_counts
+
+    counts_per_instance = torch.tensor(counts_per_instance)
+
+    return counts_per_instance
+
+
+def get_model_agreement_histogram(
+    predictions: Union[pd.DataFrame, torch.Tensor, np.ndarray],
+    true_labels: Optional[Union[pd.Series, torch.Tensor, np.ndarray]] = None,
+    restrict_only_pos_instances: bool = False,
+    restrict_only_neg_instances: bool = False,
+    count_acceptances: bool = True,
+    return_fractions: bool = False,
+    padding: bool = True,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Computes histogram of model agreements (either acceptances or rejections).
+
+    Parameters:
+        predictions: Predictions (instances, models).
+        true_labels: optional binary labels
+        restrict_only_pos_instances: Whether to include only positive instances.
+        restrict_only_neg_instances: Whether to include only negative instances.
+        count_acceptances: If False, counts rejections instead.
+        padding: whether to return a padded histogram (length M+1).
+
+    Returns:
+        (bin_values, counts): Tensors of unique counts or full histogram.
+    """
+    M = predictions.shape[1]
+    counts_per_instance = get_obs_agreement_counts(
+        predictions=predictions,
+        true_labels=true_labels,
+        restrict_only_pos_instances=restrict_only_pos_instances,
+        restrict_only_neg_instances=restrict_only_neg_instances,
+        return_fractions=return_fractions,
+        count_acceptances=count_acceptances,
+    )
+    # aggregate counts into histogram
+    values, counts = torch.unique(counts_per_instance, return_counts=True)
+
+    # apply padding
+    if padding:
+        padded_counts = torch.zeros(M + 1, dtype=counts.dtype)
+        padded_counts[values.long()] = counts
+        return torch.arange(M + 1).numpy(), padded_counts.numpy()
+
+    return values.numpy(), counts.numpy()
 
 
 def get_agreement_matrix(models, dictionary: dict, fun: callable):
@@ -270,6 +311,11 @@ def get_agreement_matrix(models, dictionary: dict, fun: callable):
             matrix[i][j] = fun(dictionary[mi], dictionary[mj])
             matrix[j][i] = matrix[i][j]
     return matrix
+
+
+# ------------------------------
+# Ambiguity and Discrepancy
+# ------------------------------
 
 
 def get_ambiguity(h0_predictions: pd.Series, predictions: pd.DataFrame):
@@ -285,21 +331,6 @@ def get_ambiguity(h0_predictions: pd.Series, predictions: pd.DataFrame):
     # only compare entries that are different and valid
     any_change = (diff & valid_mask).any(axis=1)
     return any_change.sum() / N
-
-    # if predictions.isna().any().any():
-    #     print("NaNs contained")
-    #     nan_mask_col = predictions.isna().any()
-    #     # compute changes without NaN columns
-    #     num_models_agreeing_h0 =  predictions.loc[:, ~nan_mask_col].eq(h0_predictions, axis=0).sum(axis=1)
-
-    # else:
-    #     num_models_agreeing_h0 = predictions.eq(h0_predictions, axis=0).sum(axis=1)
-    #     return (
-    #         num_models_agreeing_h0[
-    #             (num_models_agreeing_h0 != 0) & (num_models_agreeing_h0 != M)
-    #         ].count()
-    #         / N
-    #     )
 
 
 def get_discrepancy(h0_predictions: pd.Series, predictions: pd.DataFrame):
@@ -353,9 +384,9 @@ def get_discrepancy_all_models(predictions: pd.DataFrame):
     return max_diff / N
 
 
-# ---------------
+# ------------------------------
 # UTILS
-# ----------------
+# ------------------------------
 
 
 def matrix_pairwise_evals(models, fun, only_lower_diag=True):

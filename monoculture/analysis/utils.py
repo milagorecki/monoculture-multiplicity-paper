@@ -130,6 +130,7 @@ def create_result_df(
                 )
                 threshold = get_metric(file_path, metric="threshold")
                 accuracy = get_metric(file_path, metric="accuracy")
+                balanced_accuracy = get_metric(file_path, metric="balanced_accuracy")
 
                 res = [
                     task,
@@ -140,6 +141,7 @@ def create_result_df(
                     ),  # (bool), if True fitted on 500 data points
                     threshold,
                     accuracy,
+                    balanced_accuracy,
                     bench_hash,
                     (
                         parsed_results["config_few_shot"]
@@ -152,7 +154,7 @@ def create_result_df(
                     prompt_feature_order,
                     file_path,
                     parsed_results["predictions_path"][
-                        parsed_results["predictions_path"].find("results/"):
+                        parsed_results["predictions_path"].find("results/") :
                     ],
                 ]
                 results_all_tasks.append(res)
@@ -173,6 +175,7 @@ def create_result_df(
             "threshold_fitted",
             "threshold",
             "accuracy",
+            "balanced_accuracy",
             "bench_hash",
             "num_shots",
             "prompt_format",
@@ -436,7 +439,7 @@ def add_evals_to_df(
         # "ppr",
         # "num_pred_negatives",
         # "num_pred_positives",
-        "balanced_accuracy",
+        # "balanced_accuracy",
     ],
 ):
     for metric in metrics:
@@ -446,13 +449,13 @@ def add_evals_to_df(
     return df
 
 
-def get_metric(json_path: str | Path, metric: str = "accuracy"):
+def get_metric(json_path: str | Path, metric: str):
     """
     Retrieves the specified metric from a benchmark results file.
 
     Args:
         json_path (str | Path): Path to the JSON file containing evaluation results.
-        metric (str, optional): The name of the metric to retrieve. Defaults to "accuracy".
+        metric (str, optional): The name of the metric to retrieve.
 
     Returns:
         The value of the specified metric from the evaluation results.
@@ -489,27 +492,31 @@ def filter_by_label(predictions, data, label_val):
     return predictions, data
 
 
-def filter_top_models_by_eps(df, eps=0.05):
+def filter_top_models_by_eps(df, eps=0.05, acc="balanced_accuracy"):
     # sort by acc
-    df_sorted_by_acc = df.sort_values(by="accuracy", ascending=False)
+    df_sorted_by_acc = df.sort_values(by=acc, ascending=False)
     # top acc
-    top_acc = df_sorted_by_acc.iloc[0]["accuracy"].item()
+    top_acc = df_sorted_by_acc.iloc[0][acc].item()
     # filter models
-    models = df[df["accuracy"] >= top_acc - eps]["model"].to_list()
+    models = df[df[acc] >= top_acc - eps]["model"].to_list()
     return sorted(models, key=get_size_and_it)
 
 
-def filter_top_models_by_k(df, k=10):
+def filter_top_models_by_k(df, k=10, acc="balanced_accuracy"):
     # sort by acc
-    df_sorted_by_acc = df.sort_values(by="accuracy", ascending=False)
+    df_sorted_by_acc = df.sort_values(by=acc, ascending=False)
     # get top k models
     models = df_sorted_by_acc.iloc[:k]["model"].to_list()
     return sorted(models, key=get_size_and_it)
 
 
-def filter_models_better_const(df, y_true):
-    const_acc = max((y_true == 1).sum(), (y_true == 0).sum()) / y_true.shape[0]
-    models = df["model"][df["accuracy"] > const_acc].to_list()
+def filter_models_better_const(df, y_true, acc="balanced_accuracy"):
+    print(f"Using {acc} for comparison.")
+    if acc == "accuracy":
+        const_acc = max((y_true == 1).sum(), (y_true == 0).sum()) / y_true.shape[0]
+    else:
+        const_acc = 0.5
+    models = df["model"][df[acc] > const_acc].to_list()
     return sorted(models, key=get_size_and_it)
 
 
@@ -525,6 +532,7 @@ def filter_results(
     eps=0.05,
     restrict_to_positive_label=True,
     restrict_to_negative_label=False,
+    acc="balanced_accuracy",
 ):
     assert not (
         restrict_to_positive_label & restrict_to_negative_label
@@ -544,7 +552,9 @@ def filter_results(
             task_df = df[df["task"] == task]
 
             if restrict_to_better_const:
-                models = filter_models_better_const(df=task_df, y_true=data[task][1])
+                models = filter_models_better_const(
+                    df=task_df, y_true=data[task][1], acc=acc
+                )
                 predictions[task] = predictions[task].filter(items=models)
 
             if restrict_to_positive_label or restrict_to_negative_label:
@@ -560,10 +570,10 @@ def filter_results(
         for task in tasks:
             task_df = df[df["task"] == task]
             if restrict_to_topk:
-                models = filter_top_models_by_k(df=task_df, k=topk)
+                models = filter_top_models_by_k(df=task_df, k=topk, acc=acc)
                 predictions[task] = predictions[task].filter(items=models)
             if restrict_to_top_eps:
-                models = filter_top_models_by_eps(df=task_df, eps=eps)
+                models = filter_top_models_by_eps(df=task_df, eps=eps, acc=acc)
                 predictions[task] = predictions[task].filter(items=models)
             print(task, predictions[task].shape)
     return predictions, data
@@ -710,7 +720,7 @@ def df_to_dict(df):
 
 def parse_model_name(name: str) -> str:
     """Parse model name from model key"""
-    name = name[name.find("--") + 2:]
+    name = name[name.find("--") + 2 :]
     return name
 
 
@@ -736,3 +746,20 @@ def truncate(num: float, digits: int = 6) -> float:
 def binarize_using_threshold(col, evals: dict):
     m = col.name
     return col > evals[m]["threshold"]
+
+
+def no_leading_zero(x, pos):
+    if abs(x) < 1:
+        return f"{x:.2f}".lstrip("0").replace("-0", "-")
+    else:
+        return f"{x:.2f}"
+
+
+def filter_valid_models(predictions, baseline_rates):
+    nan_mask = predictions.isnan().any(dim=0)
+    if nan_mask.any():
+        logging.warning(f"Ignoring {nan_mask.sum().item()} models with NaN values.")
+        predictions = predictions[:, ~nan_mask]
+        if baseline_rates is not None:
+            baseline_rates = baseline_rates[~nan_mask]
+    return predictions, baseline_rates
