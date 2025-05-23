@@ -10,14 +10,15 @@
     1. download the fork
     2. in the folktexts folder, 
         - install the package using `pip install -e . `
-        - create model dataset and results folder `mkdir data models`
+        - create model dataset and results folder `mkdir data models results`
         - download models and tokenizers using e.g. ```download_models --model 'google/gemma-2b' --save-dir models```
-    3. manually re-install `xport` and `pandas`. Note: This will lead to a pip dependency warning for xport. But both packages work fine together, so ignore or adjust requirements in xport. 
-    ```
-    pip install xport==3.6.1 
-    pip install pandas==pip install pandas==2.2.3
-    ```
-    If this step is missed, there will be some error when trying to load the BRFSS dataset. 
+    3. manually re-install `xport` and `pandas`. *Note*: This will lead to a pip dependency warning for xport. But both packages work fine together, so ignore or adjust requirements in xport. 
+
+        `pip install xport==3.6.1`
+
+         `pip install pandas==pip install pandas==2.2.3`
+
+        If this step is missed, there will be some error when trying to load the BRFSS dataset. 
 - Datasets will be downloaded when running the respective benchmarks and stored for future runs. 
 
 ## Getting Model Predictions
@@ -47,9 +48,4 @@ python -m  monoculture.baseline.run_acs_benchmark_baseline --model Constant --re
 ## Analysis model prediction for monoculture and multiplicity 
 - All metrics are collected in `metrics.py`.
 - For plotting, follow the respective notebook provided. 
-
-
-## Available predictions 
-TODO: make model predictions on ACSIncome available 
-
 
